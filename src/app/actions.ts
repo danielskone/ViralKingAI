@@ -48,3 +48,58 @@ export async function signOut() {
   await supabase.auth.signOut();
   redirect("/login");
 }
+
+export async function startGeneration(formData: FormData) {
+  const projectId = String(formData.get("project_id"));
+  const sceneCount = Math.min(Math.max(Number(formData.get("scene_count") ?? 3), 1), 5);
+  const supabase = await createClient();
+
+  // RLS guarantees this only returns the caller's own project.
+  const { data: project } = await supabase.from("projects").select("id").eq("id", projectId).maybeSingle();
+  if (!project) throw new Error("Project not found");
+
+  // One generation at a time per project, so a double click can't start two runs.
+  const { count } = await supabase
+    .from("generation_jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("project_id", projectId)
+    .in("status", ["queued", "running"]);
+  if (count) return;
+
+  const { data: job, error } = await supabase
+    .from("generation_jobs")
+    .insert({ project_id: projectId, job_type: "script", input: { scene_count: sceneCount } })
+    .select("id")
+    .single();
+  if (error) throw new Error(error.message);
+
+  await supabase.from("projects").update({ status: "generating" }).eq("id", projectId);
+
+  const url = process.env.WORKER_SUBMIT_URL;
+  const secret = process.env.WORKER_SHARED_SECRET;
+  let failure: string | null = null;
+  if (!url || !secret) {
+    failure = "The GPU worker isn't connected yet (WORKER_SUBMIT_URL is not set).";
+  } else {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ job_id: job.id }),
+        cache: "no-store",
+      });
+      if (!res.ok) failure = `GPU worker refused the job (${res.status}).`;
+    } catch (e) {
+      failure = `Could not reach the GPU worker: ${(e as Error).message}`;
+    }
+  }
+
+  if (failure) {
+    // Users can't update jobs under RLS, so record the failure on the project instead.
+    await supabase.from("projects").update({ status: "failed" }).eq("id", projectId);
+    await supabase.from("generation_jobs").delete().eq("id", job.id);
+    revalidatePath(`/projects/${projectId}`);
+    redirect(`/projects/${projectId}?error=${encodeURIComponent(failure)}`);
+  }
+  revalidatePath(`/projects/${projectId}`);
+}
