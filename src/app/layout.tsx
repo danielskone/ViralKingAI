@@ -6,7 +6,7 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "ViralReel AI",
+  title: "ViralKing AI",
   description: "Turn your ideas, product photos and videos into branded social content.",
 };
 

@@ -4,7 +4,7 @@ import { signOut } from "@/app/actions";
 export function Logo() {
   return (
     <Link href="/dashboard" className="text-lg font-bold tracking-tight">
-      Viral<span className="text-accent">Reel</span> AI
+      Viral<span className="text-accent">King</span> AI
     </Link>
   );
 }

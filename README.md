@@ -1,4 +1,4 @@
-# ViralReel AI
+# ViralKing AI
 
 Turn ideas, product photos and existing videos into branded social content.
 
