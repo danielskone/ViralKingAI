@@ -1,0 +1,23 @@
+name: Deploy AI worker to Modal
+
+# Deploys worker/modal_app.py. The worker's own keys live in the Modal secret
+# "viralking-secrets" (created in the Modal dashboard), not in GitHub.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["worker/**"]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r worker/requirements.txt
+      - run: modal deploy worker/modal_app.py
