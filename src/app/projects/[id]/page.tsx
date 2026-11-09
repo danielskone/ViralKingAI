@@ -3,10 +3,18 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import Uploader from "@/components/Uploader";
 import { createClient } from "@/lib/supabase/server";
-import { deleteAsset, deleteProject } from "@/app/actions";
+import JobsPanel from "@/components/JobsPanel";
+import { deleteAsset, deleteProject, startGeneration } from "@/app/actions";
 
-export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function ProjectPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ error?: string }>;
+}) {
   const { id } = await params;
+  const { error: genError } = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   const { data: project } = await supabase.from("projects").select("*").eq("id", id).maybeSingle();
@@ -17,6 +25,17 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
     .select("id, kind, storage_path, file_name, mime_type")
     .eq("project_id", id)
     .order("created_at", { ascending: true });
+
+  const { data: jobs } = await supabase
+    .from("generation_jobs")
+    .select("id, job_type, status, input, error, created_at, output")
+    .eq("project_id", id)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  const busy = jobs?.some((j) => j.status === "queued" || j.status === "running") ?? false;
+  const script = jobs?.find((j) => j.job_type === "script" && j.status === "succeeded")?.output as
+    | { hook?: string; cta?: string; scenes?: { prompt: string; caption?: string }[] }
+    | undefined;
 
   const urls = new Map<string, string>();
   if (assets?.length) {
@@ -82,8 +101,40 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
           )}
         </section>
 
-        <section className="rounded-2xl border border-border bg-card p-6 text-sm text-muted">
-          AI generation arrives in step 2: your own GPU server will turn these photos and your offer into video scenes.
+        <section className="space-y-4 rounded-2xl border border-border bg-card p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Generate with AI</h2>
+              <p className="text-sm text-muted">
+                Your own AI writes the script, then animates your first photo and creates the other scenes.
+              </p>
+            </div>
+            <form action={startGeneration} className="flex items-center gap-2">
+              <input type="hidden" name="project_id" value={project.id} />
+              <select name="scene_count" defaultValue="3" className="input w-auto" disabled={busy}>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <option key={n} value={n}>{n} scene{n > 1 ? "s" : ""}</option>
+                ))}
+              </select>
+              <button className="btn" disabled={busy}>{busy ? "Generating…" : "Generate scenes"}</button>
+            </form>
+          </div>
+          {genError && <p className="text-sm text-accent">{genError}</p>}
+          {script?.scenes?.length ? (
+            <div className="space-y-2 text-sm">
+              {script.hook && <p><span className="text-muted">Hook:</span> {script.hook}</p>}
+              <ol className="list-decimal space-y-1 pl-5">
+                {script.scenes.map((s, i) => (
+                  <li key={i}>
+                    <span className="font-medium">{s.caption}</span>
+                    <span className="block text-muted">{s.prompt}</span>
+                  </li>
+                ))}
+              </ol>
+              {script.cta && <p><span className="text-muted">Call to action:</span> {script.cta}</p>}
+            </div>
+          ) : null}
+          <JobsPanel projectId={project.id} initial={(jobs ?? []).map(({ output: _o, ...j }) => j)} />
         </section>
       </main>
     </>
