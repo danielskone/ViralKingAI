@@ -37,8 +37,8 @@ export async function deleteAsset(formData: FormData) {
   const id = String(formData.get("id"));
   const projectId = String(formData.get("project_id"));
   const supabase = await createClient();
-  const { data } = await supabase.from("assets").select("storage_path").eq("id", id).single();
-  if (data) await supabase.storage.from("media").remove([data.storage_path]);
+  const { data } = await supabase.from("assets").select("storage_path, thumb_path").eq("id", id).single();
+  if (data) await supabase.storage.from("media").remove([data.storage_path, data.thumb_path].filter((p): p is string => !!p));
   await supabase.from("assets").delete().eq("id", id);
   revalidatePath(`/projects/${projectId}`);
 }
@@ -190,8 +190,8 @@ export async function toggleLike(formData: FormData) {
 export async function deleteLibraryItem(formData: FormData) {
   const id = String(formData.get("id"));
   const supabase = await createClient();
-  const { data } = await supabase.from("assets").select("storage_path").eq("id", id).single();
-  if (data) await supabase.storage.from("media").remove([data.storage_path]);
+  const { data } = await supabase.from("assets").select("storage_path, thumb_path").eq("id", id).single();
+  if (data) await supabase.storage.from("media").remove([data.storage_path, data.thumb_path].filter((p): p is string => !!p));
   await supabase.from("assets").delete().eq("id", id);
   revalidatePath("/media");
 }

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { saveThumb } from "@/lib/thumbs";
 
 function kindFor(file: File, asLogo: boolean) {
   if (asLogo) return "logo";
@@ -37,19 +38,20 @@ export default function Uploader({ projectId, userId }: { projectId: string; use
         setMsg(`Upload failed for ${file.name}: ${upErr.message}`);
         continue;
       }
-      const { error: dbErr } = await supabase.from("assets").insert({
+      const { data: row, error: dbErr } = await supabase.from("assets").insert({
         project_id: projectId,
         kind,
         storage_path: path,
         file_name: file.name,
         mime_type: file.type,
         size_bytes: file.size,
-      });
+      }).select("id").single();
       if (dbErr) {
         await supabase.storage.from("media").remove([path]);
         setMsg(`Could not save ${file.name}: ${dbErr.message}`);
         continue;
       }
+      if (file.type.startsWith("image/")) await saveThumb(supabase, userId, row.id, file);
       done++;
     }
     setBusy(false);

@@ -2,7 +2,8 @@ import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import Composer from "@/components/Composer";
 import { createClient } from "@/lib/supabase/server";
-import { isVideo, withUrls } from "@/lib/library";
+import { isVideo, needsThumb, withUrls } from "@/lib/library";
+import ThumbBackfill from "@/components/ThumbBackfill";
 import { Crown, Film } from "@/components/icons";
 
 const STATUS: Record<string, string> = { draft: "Draft", generating: "Generating", ready: "Ready", failed: "Failed" };
@@ -12,14 +13,14 @@ export default async function Dashboard() {
   const { data: { user } } = await supabase.auth.getUser();
 
   const [{ data: library }, { data: projects }, { data: media }] = await Promise.all([
-    supabase.from("assets").select("id, kind, storage_path, file_name").in("kind", ["product", "avatar"]).order("created_at", { ascending: false }),
+    supabase.from("assets").select("id, kind, storage_path, thumb_path, file_name, mime_type").in("kind", ["product", "avatar"]).order("created_at", { ascending: false }),
     supabase.from("projects").select("id, title, aspect_ratio, status, updated_at").order("updated_at", { ascending: false }).limit(24),
-    supabase.from("assets").select("project_id, kind, storage_path, mime_type, created_at").in("kind", ["generated_clip", "image"]).not("project_id", "is", null).order("created_at", { ascending: false }),
+    supabase.from("assets").select("project_id, kind, storage_path, thumb_path, mime_type, created_at").in("kind", ["generated_clip", "image"]).not("project_id", "is", null).order("created_at", { ascending: false }),
   ]);
 
   const lib = await withUrls(supabase, library ?? []);
   // Cover for each project: newest generated clip, else first photo.
-  const covers = new Map<string, { storage_path: string; kind: string; mime_type: string | null }>();
+  const covers = new Map<string, { storage_path: string; thumb_path: string | null; kind: string; mime_type: string | null }>();
   for (const m of media ?? []) {
     const cur = covers.get(m.project_id!);
     if (!cur || (cur.kind !== "generated_clip" && m.kind === "generated_clip")) covers.set(m.project_id!, m);
@@ -66,10 +67,10 @@ export default async function Dashboard() {
                 <Link key={p.id} href={`/projects/${p.id}`} className="group overflow-hidden rounded-2xl border border-border bg-card transition hover:border-gold/60">
                   <div className="relative aspect-[4/5] bg-panel">
                     {c?.url && isVideo(c.kind, c.mime_type) ? (
-                      <video src={c.url} muted loop playsInline autoPlay className="h-full w-full object-cover" />
+                      <video src={c.url} muted loop playsInline autoPlay preload="metadata" className="h-full w-full object-cover" />
                     ) : c?.url ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={c.url} alt="" className="h-full w-full object-cover transition group-hover:scale-[1.03]" />
+                      <img src={c.thumb} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover transition group-hover:scale-[1.03]" />
                     ) : (
                       <div className="flex h-full items-center justify-center text-muted"><Film className="h-8 w-8" /></div>
                     )}
@@ -89,6 +90,7 @@ export default async function Dashboard() {
           </div>
         )}
       </section>
+      {lib.some(needsThumb) && <ThumbBackfill userId={user!.id} items={lib.filter(needsThumb).map((i) => ({ id: i.id, url: i.url }))} />}
     </AppShell>
   );
 }
