@@ -214,10 +214,10 @@ class VideoGenerator:
         self.t2v = WanPipeline.from_pretrained(VIDEO_ID, vae=vae, torch_dtype=torch.bfloat16)
         self.i2v = WanImageToVideoPipeline.from_pipe(self.t2v)
         # Keep only the model that is running on the GPU (the 11 GB text encoder is
-        # parked in RAM while the video model works) and decode the video in tiles.
-        # Both pipelines share the same modules, so the offload hooks cover both.
+        # parked in RAM while the video model works). Both pipelines share the same
+        # modules, so the offload hooks cover both. No VAE tiling: in diffusers 0.35
+        # the tiled path skips the Wan 2.2 VAE's patchify step and crashes.
         self.t2v.enable_model_cpu_offload()
-        self.t2v.vae.enable_tiling()
         models.commit()
 
     @staticmethod
