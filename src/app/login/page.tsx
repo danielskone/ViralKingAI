@@ -49,10 +49,11 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-4">
-      <form onSubmit={submit} className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-card p-6">
-        <h1 className="text-2xl font-bold">
-          Viral<span className="text-accent">King</span> AI
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,61,110,0.22),transparent_60%)]" />
+      <form onSubmit={submit} className="relative w-full max-w-sm space-y-4 rounded-3xl border border-white/10 bg-white/[0.03] p-8 backdrop-blur">
+        <h1 className="font-display text-3xl font-semibold tracking-tight">
+          Viral<span className="text-accent">King</span> <span className="text-white/50">AI</span>
         </h1>
         <p className="text-sm text-muted">{mode === "signin" ? "Sign in to your studio" : "Create your account"}</p>
         <input className="input" type="email" placeholder="Email" required value={email} onChange={(e) => setEmail(e.target.value)} />
