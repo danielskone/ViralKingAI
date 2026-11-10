@@ -36,6 +36,7 @@ export default async function ProjectPage({
   const run = latestRun(jobs ?? []);
   const busy = run.some((j) => j.status === "queued" || j.status === "running");
   const lastScript = run.find((j) => j.job_type === "script");
+  const lastIdea = String((lastScript?.input as { idea?: string } | null)?.idea ?? "");
   const lastCount = String((lastScript?.input as { scene_count?: number } | null)?.scene_count ?? 3);
   const script = (lastScript?.status === "succeeded" ? lastScript.output : undefined) as
     | { hook?: string; cta?: string; scenes?: { prompt: string; caption?: string }[] }
@@ -106,23 +107,35 @@ export default async function ProjectPage({
         </section>
 
         <section className="space-y-4 rounded-2xl border border-border bg-card p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-semibold">Generate with AI</h2>
-              <p className="text-sm text-muted">
-                Your own AI writes the script, then animates your first photo and creates the other scenes.
-              </p>
+          <form action={startGeneration} className="space-y-3">
+            <input type="hidden" name="project_id" value={project.id} />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Generate with AI</h2>
+                <p className="text-sm text-muted">
+                  Describe the video you want. Your own AI turns it into detailed scenes and animates your first photo.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <select key={lastCount} name="scene_count" defaultValue={lastCount} className="input w-auto" disabled={busy}>
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <option key={n} value={n}>{n} scene{n > 1 ? "s" : ""}</option>
+                  ))}
+                </select>
+                <button className="btn" disabled={busy}>{busy ? "Generating…" : "Generate scenes"}</button>
+              </div>
             </div>
-            <form action={startGeneration} className="flex items-center gap-2">
-              <input type="hidden" name="project_id" value={project.id} />
-              <select key={lastCount} name="scene_count" defaultValue={lastCount} className="input w-auto" disabled={busy}>
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <option key={n} value={n}>{n} scene{n > 1 ? "s" : ""}</option>
-                ))}
-              </select>
-              <button className="btn" disabled={busy}>{busy ? "Generating…" : "Generate scenes"}</button>
-            </form>
-          </div>
+            <textarea
+              key={lastIdea}
+              name="idea"
+              defaultValue={lastIdea}
+              rows={3}
+              maxLength={600}
+              disabled={busy}
+              className="input w-full resize-y"
+              placeholder="Describe your video (optional). Example: A confident young man wearing this shirt walks through a snowy downtown street at night, Christmas lights glowing, slow cinematic tracking shot."
+            />
+          </form>
           {genError && <p className="text-sm text-accent">{genError}</p>}
           {script?.scenes?.length ? (
             <div className="space-y-2 text-sm">

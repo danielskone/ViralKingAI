@@ -32,12 +32,15 @@ MODELS_DIR = "/models"
 SIZES = {"9:16": (704, 1280), "16:9": (1280, 704), "1:1": (960, 960)}
 FPS = 24
 NUM_FRAMES = 121  # ~5 seconds; must be 4k+1
-STEPS = int(os.environ.get("WAN_STEPS", "30"))
+STEPS = int(os.environ.get("WAN_STEPS", "40"))
 VIDEO_TIMEOUT = 2400  # seconds Modal lets one clip run
 RENDER_BUDGET = VIDEO_TIMEOUT - 240  # stop early so the job is marked failed, not left "running"
+# Wan's own recommended negative prompt (the model was trained with it), plus English extras.
 NEGATIVE = (
-    "blurry, low quality, distorted, deformed hands, extra fingers, watermark, text artifacts, "
-    "jpeg artifacts, flicker, static frame, oversaturated, ugly, disfigured"
+    "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，"
+    "JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，"
+    "手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走, "
+    "blurry, low quality, distorted, deformed hands, extra fingers, watermark, text, logo artifacts, flicker"
 )
 
 app = modal.App(APP_NAME)
@@ -131,23 +134,42 @@ class ScriptWriter:
         )
         models.commit()
 
-    def _write(self, title: str, offer: str, has_image: bool, n: int) -> dict:
+    def _write(self, title: str, offer: str, idea: str, has_image: bool, n: int) -> dict:
         system = (
-            "You are a short-form social video director for small businesses. "
-            "Reply with JSON only, no prose."
+            "You are an award-winning commercial director writing shot prompts for the Wan 2.2 "
+            "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
+            "cinematographer: name the subject and what they look like, the exact action, the "
+            "setting, the camera move (slow dolly in, tracking shot, orbit, handheld), the lens "
+            "and framing (close-up, medium shot, 35mm, shallow depth of field), the lighting "
+            "(golden hour, soft window light, neon) and the mood. Be literal and concrete; one "
+            "main action per shot; no on-screen text or logos. Reply with JSON only."
         )
-        user = f"""Business video: "{title}".
-Offer / message: "{offer or title}".
-{"The customer uploaded a product or business photo; scene 1 animates that photo, so describe motion for it." if has_image else "No photo was uploaded; describe every scene fully."}
+        example = (
+            "Medium tracking shot of a confident young woman in a cream knit sweater walking "
+            "down a cobblestone street at golden hour, warm sunlight flaring through the trees "
+            "behind her, she glances at the camera and smiles, fabric moving naturally with "
+            "each step, shallow depth of field, 35mm lens, soft film grain, premium fashion "
+            "commercial look."
+        )
+        photo_rule = (
+            "The customer uploaded a product photo. Scene 1 starts from that exact photo, so its "
+            "prompt must describe the product as the hero of the shot and the motion around it "
+            "(camera move, light, subtle product movement); do not invent a different product."
+            if has_image else "No photo was uploaded; describe every scene fully."
+        )
+        user = f"""Project: "{title}". Business / offer: "{offer or title}".
+Customer's idea for the video: "{idea or 'not given; choose a strong, scroll-stopping concept for this offer'}".
+{photo_rule}
 
-Write {n} scenes for a 15-second vertical promo. For each scene give:
-- "prompt": a vivid, literal visual description for an AI video model (subject, setting, camera movement, lighting, style). 40-70 words. No on-screen text, no logos.
-- "caption": the on-screen text for that scene, max 8 words.
-Also give "hook" (first line to grab attention, max 8 words) and "cta" (call to action, max 6 words).
+Write {n} scene(s) for a short social media ad that follows the customer's idea closely.
+For each scene give:
+- "prompt": 70-110 words, in the style of this example: "{example}"
+- "caption": on-screen text for that scene, max 8 words.
+Also give "hook" (max 8 words) and "cta" (max 6 words).
 JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str}}]}}"""
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         ids = self.tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt").to("cuda")
-        out = self.model.generate(ids, max_new_tokens=900, temperature=0.8, top_p=0.9, do_sample=True)
+        out = self.model.generate(ids, max_new_tokens=1600, temperature=0.8, top_p=0.9, do_sample=True)
         text = self.tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)
         match = re.search(r"\{.*\}", text, re.S)
         data = json.loads(match.group(0) if match else text)
@@ -171,7 +193,8 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                 .eq("kind", "image").order("created_at").execute().data
             )
             n = int(job["input"].get("scene_count", 3))
-            script = self._write(project["title"], project.get("offer_description") or "", bool(images), n)
+            idea = (job["input"].get("idea") or "").strip()
+            script = self._write(project["title"], project.get("offer_description") or "", idea, bool(images), n)
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.
@@ -238,20 +261,19 @@ class VideoGenerator:
 
     @staticmethod
     def _fit(img, w: int, h: int):
-        """Center-crop and resize the photo to the exact output frame."""
-        from PIL import Image
+        """Fit the whole photo into the frame (nothing cut off). Empty space is filled
+        with a blurred, enlarged copy of the photo, like social apps do."""
+        from PIL import Image, ImageFilter
 
         img = img.convert("RGB")
-        src_ratio, dst_ratio = img.width / img.height, w / h
-        if src_ratio > dst_ratio:
-            nw = int(img.height * dst_ratio)
-            x = (img.width - nw) // 2
-            img = img.crop((x, 0, x + nw, img.height))
-        else:
-            nh = int(img.width / dst_ratio)
-            y = (img.height - nh) // 2
-            img = img.crop((0, y, img.width, y + nh))
-        return img.resize((w, h), Image.LANCZOS)
+        scale = max(w / img.width, h / img.height)
+        bg = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
+        bg = bg.crop(((bg.width - w) // 2, (bg.height - h) // 2, (bg.width - w) // 2 + w, (bg.height - h) // 2 + h))
+        bg = bg.filter(ImageFilter.GaussianBlur(40))
+        scale = min(w / img.width, h / img.height)
+        fg = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
+        bg.paste(fg, ((w - fg.width) // 2, (h - fg.height) // 2))
+        return bg
 
     @modal.method()
     def run(self, job_id: str):

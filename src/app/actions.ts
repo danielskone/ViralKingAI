@@ -52,6 +52,7 @@ export async function signOut() {
 export async function startGeneration(formData: FormData) {
   const projectId = String(formData.get("project_id"));
   const sceneCount = Math.min(Math.max(Number(formData.get("scene_count") ?? 3), 1), 5);
+  const idea = String(formData.get("idea") ?? "").trim().slice(0, 600);
   const supabase = await createClient();
 
   // RLS guarantees this only returns the caller's own project.
@@ -68,7 +69,7 @@ export async function startGeneration(formData: FormData) {
 
   const { data: job, error } = await supabase
     .from("generation_jobs")
-    .insert({ project_id: projectId, job_type: "script", input: { scene_count: sceneCount } })
+    .insert({ project_id: projectId, job_type: "script", input: { scene_count: sceneCount, idea } })
     .select("id")
     .single();
   if (error) throw new Error(error.message);
