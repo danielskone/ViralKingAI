@@ -26,7 +26,7 @@ export default async function ProjectPage({
   if (!project || !user) notFound();
 
   const [{ data: assetRows }, { data: jobs }] = await Promise.all([
-    supabase.from("assets").select("id, kind, storage_path, file_name, mime_type").eq("project_id", id).order("created_at", { ascending: true }),
+    supabase.from("assets").select("id, kind, storage_path, thumb_path, file_name, mime_type").eq("project_id", id).order("created_at", { ascending: true }),
     supabase.from("generation_jobs").select("id, job_type, status, input, error, created_at, output").eq("project_id", id).order("created_at", { ascending: false }).limit(20),
   ]);
   const assets = await withUrls(supabase, assetRows ?? []);
@@ -67,7 +67,7 @@ export default async function ProjectPage({
               {picks.map((p) => (
                 <span key={p.label} className="flex items-center gap-1.5 rounded-full border border-gold/30 bg-gold/5 py-0.5 pl-0.5 pr-2.5 text-gold-light">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  {p.url && <img src={p.url} alt="" className="h-5 w-5 rounded-full object-cover" />}
+                  {p.thumb && <img src={p.thumb} alt="" className="h-5 w-5 rounded-full object-cover" />}
                   {p.label === "Product" ? <Box className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}{p.label}
                 </span>
               ))}
@@ -160,9 +160,9 @@ export default async function ProjectPage({
                       <div className="aspect-square">
                         {a.url && (a.kind === "image" || a.kind === "logo") && (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={a.url} alt={a.file_name ?? ""} className="h-full w-full object-cover" />
+                          <img src={a.thumb} alt={a.file_name ?? ""} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                         )}
-                        {a.url && isVideo(a.kind, a.mime_type) && <video src={a.url} muted className="h-full w-full object-cover" />}
+                        {a.url && isVideo(a.kind, a.mime_type) && <video src={a.url} muted preload="metadata" className="h-full w-full object-cover" />}
                         {a.url && a.kind === "audio" && <audio src={a.url} controls className="mt-8 w-full" />}
                       </div>
                       <form action={deleteAsset} className="absolute right-1.5 top-1.5 opacity-0 transition group-hover:opacity-100">

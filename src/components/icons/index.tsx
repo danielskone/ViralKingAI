@@ -49,4 +49,5 @@ export const Trash = (p: P) => <S {...p}><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l
 export const LogOut = (p: P) => <S {...p}><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11" /></S>;
 export const Menu = (p: P) => <S {...p}><path d="M4 7h16M4 12h16M4 17h16" /></S>;
 export const Play = (p: P) => <S {...p}><path d="M8 5v14l11-7z" fill="currentColor" /></S>;
+export const ChevronDown = (p: P) => <S {...p}><path d="m6 9 6 6 6-6" /></S>;
 export const Check = (p: P) => <S {...p}><path d="m5 12 5 5 9-10" /></S>;

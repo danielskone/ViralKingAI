@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createAndGenerate } from "@/app/actions";
 import { uploadToLibrary } from "@/components/LibraryUpload";
-import { Arrow, Box, Check, Layers, Plus, Ratio, Sparkle, User } from "@/components/icons";
+import { Arrow, Box, Check, ChevronDown, Layers, Plus, Ratio, Sparkle, User } from "@/components/icons";
 
-type Item = { id: string; url?: string; file_name: string | null };
+type Item = { id: string; url?: string; thumb?: string; file_name: string | null };
 
 const STARTERS = [
   { label: "Product hero", text: "Slow cinematic push-in on the product on a dark marble pedestal, soft golden rim light, floating dust particles, luxury commercial look." },
@@ -36,9 +36,9 @@ function Picker({
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen(!open)} className={"chip" + (chosen ? " chip-on" : "")}>
-        {chosen?.url ? (
+        {chosen?.thumb ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={chosen.url} alt="" className="h-4 w-4 rounded-full object-cover" />
+          <img src={chosen.thumb} alt="" className="h-4 w-4 rounded-full object-cover" />
         ) : icon}
         {chosen ? (chosen.file_name ?? label).replace(/\.[a-z0-9]+$/i, "").slice(0, 18) : label}
       </button>
@@ -68,7 +68,7 @@ function Picker({
               <button type="button" key={i.id} onClick={() => { onChange(i.id); setOpen(false); }}
                 className={"relative aspect-square overflow-hidden rounded-xl border " + (i.id === value ? "border-gold" : "border-border hover:border-gold/60")}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                {i.url && <img src={i.url} alt={i.file_name ?? ""} className="h-full w-full object-cover" />}
+                {i.thumb && <img src={i.thumb} alt={i.file_name ?? ""} loading="lazy" decoding="async" className="h-full w-full object-cover" />}
                 {i.id === value && <span className="gold-bg absolute right-1 top-1 rounded-full p-0.5 text-black"><Check className="h-3 w-3" /></span>}
               </button>
             ))}
@@ -79,15 +79,59 @@ function Picker({
   );
 }
 
-function Cycle<T extends string | number>({ icon, options, value, onChange, render }: {
-  icon: React.ReactNode; options: T[]; value: T; onChange: (v: T) => void; render: (v: T) => string;
+/** A chip that opens a small menu of choices (used for Format and Scenes). */
+function Dropdown<T extends string | number>({ icon, label, options, value, onChange }: {
+  icon: React.ReactNode; label: string; options: { value: T; label: string; hint?: string }[]; value: T; onChange: (v: T) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = options.find((o) => o.value === value);
+
+  useEffect(() => {
+    const close = (e: MouseEvent | TouchEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, []);
+
   return (
-    <button type="button" className="chip" onClick={() => onChange(options[(options.indexOf(value) + 1) % options.length])}>
-      {icon}{render(value)}
-    </button>
+    <div ref={ref} className="relative">
+      <button type="button" aria-haspopup="listbox" aria-expanded={open} aria-label={label} onClick={() => setOpen(!open)} className={"chip" + (open ? " chip-on" : "")}>
+        {icon}{current?.label}
+        <ChevronDown className={"h-3.5 w-3.5 opacity-70 transition " + (open ? "rotate-180" : "")} />
+      </button>
+      {open && (
+        <div role="listbox" className="absolute left-0 top-full z-20 mt-2 min-w-[12rem] rounded-2xl border border-border bg-panel p-1.5 shadow-2xl">
+          <p className="eyebrow px-3 pb-1 pt-2">{label}</p>
+          {options.map((o) => (
+            <button type="button" role="option" aria-selected={o.value === value} key={String(o.value)}
+              onClick={() => { onChange(o.value); setOpen(false); }}
+              className={"flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition hover:bg-card " + (o.value === value ? "text-gold" : "text-foreground")}>
+              <span className="flex-1">
+                {o.label}
+                {o.hint && <span className="block text-xs text-muted">{o.hint}</span>}
+              </span>
+              {o.value === value && <Check className="h-4 w-4" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
+
+const FORMATS: { value: "9:16" | "16:9" | "1:1"; label: string; hint: string }[] = [
+  { value: "9:16", label: "Vertical 9:16", hint: "TikTok, Reels, Shorts" },
+  { value: "16:9", label: "Wide 16:9", hint: "YouTube, website" },
+  { value: "1:1", label: "Square 1:1", hint: "Instagram & Facebook feed" },
+];
+const SCENES = [1, 2, 3, 4, 5].map((n) => ({ value: n, label: `${n} scene${n > 1 ? "s" : ""}`, hint: `About ${n * 5} seconds` }));
 
 export default function Composer({ products, avatars, userId }: { products: Item[]; avatars: Item[]; userId: string }) {
   const [idea, setIdea] = useState("");
@@ -119,9 +163,8 @@ export default function Composer({ products, avatars, userId }: { products: Item
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Picker icon={<Box className="h-4 w-4" />} label="Product" items={products} value={product} onChange={setProduct} kind="product" userId={userId} />
         <Picker icon={<User className="h-4 w-4" />} label="Avatar" items={avatars} value={avatar} onChange={setAvatar} kind="avatar" userId={userId} />
-        <Cycle icon={<Ratio className="h-4 w-4" />} options={["9:16", "16:9", "1:1"] as const as unknown as ("9:16" | "16:9" | "1:1")[]} value={aspect} onChange={setAspect}
-          render={(v) => ({ "9:16": "Vertical 9:16", "16:9": "Wide 16:9", "1:1": "Square 1:1" })[v]} />
-        <Cycle icon={<Layers className="h-4 w-4" />} options={[1, 2, 3, 4, 5]} value={scenes} onChange={setScenes} render={(v) => `${v} scene${v > 1 ? "s" : ""}`} />
+        <Dropdown icon={<Ratio className="h-4 w-4" />} label="Format" options={FORMATS} value={aspect} onChange={setAspect} />
+        <Dropdown icon={<Layers className="h-4 w-4" />} label="Scenes" options={SCENES} value={scenes} onChange={setScenes} />
         {product && !avatar && (
           <button type="button" onClick={() => setModelShot(!modelShot)} className={"chip" + (modelShot ? " chip-on" : "")}>
             <Sparkle className="h-4 w-4" /> On a model

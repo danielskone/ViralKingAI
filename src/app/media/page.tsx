@@ -2,7 +2,8 @@ import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import LibraryUpload from "@/components/LibraryUpload";
 import { createClient } from "@/lib/supabase/server";
-import { isVideo, withUrls } from "@/lib/library";
+import { isVideo, needsThumb, withUrls } from "@/lib/library";
+import ThumbBackfill from "@/components/ThumbBackfill";
 import { deleteLibraryItem, toggleLike } from "@/app/actions";
 import { Heart, Trash } from "@/components/icons";
 
@@ -30,7 +31,7 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  let q = supabase.from("assets").select("id, kind, storage_path, file_name, mime_type, project_id, liked, created_at").order("created_at", { ascending: false }).limit(200);
+  let q = supabase.from("assets").select("id, kind, storage_path, thumb_path, file_name, mime_type, project_id, liked, created_at").order("created_at", { ascending: false }).limit(200);
   if (tab === "uploads") q = q.in("kind", ["image", "video", "logo", "product", "avatar"]);
   if (tab === "generations") q = q.in("kind", ["generated_clip", "export"]);
   if (tab === "liked") q = q.eq("liked", true);
@@ -40,6 +41,7 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
   let items = await withUrls(supabase, data ?? []);
   if (type === "images") items = items.filter((i) => !isVideo(i.kind, i.mime_type));
   if (type === "videos") items = items.filter((i) => isVideo(i.kind, i.mime_type));
+  const missing = items.filter(needsThumb).map((i) => ({ id: i.id, url: i.url }));
   const copy = COPY[tab];
   const portrait = tab === "avatars" || tab === "products";
 
@@ -65,14 +67,14 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
 
         <div className={"mt-6 grid gap-4 " + (portrait ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5")}>
           {copy.upload && <LibraryUpload userId={user!.id} kind={copy.upload.kind} label={copy.upload.label} />}
-          {items.map((i) => (
+          {items.map((i, idx) => (
             <div key={i.id} className="group relative overflow-hidden rounded-2xl border border-border bg-card transition hover:border-gold/60">
               <div className="aspect-[4/5] bg-panel">
                 {i.url && isVideo(i.kind, i.mime_type) ? (
                   <video src={i.url} controls playsInline preload="metadata" className="h-full w-full object-cover" />
                 ) : i.url ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={i.url} alt={i.file_name ?? ""} className="h-full w-full object-cover" />
+                  <img src={i.thumb} alt={i.file_name ?? ""} loading={idx < 10 ? "eager" : "lazy"} decoding="async" className="h-full w-full object-cover" />
                 ) : null}
               </div>
               <div className="absolute right-2 top-2 flex gap-1.5 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100">
@@ -100,6 +102,7 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
             </div>
           ))}
         </div>
+        {missing.length > 0 && <ThumbBackfill userId={user!.id} items={missing} />}
         {!items.length && <p className="mt-10 text-center text-muted">{copy.empty}</p>}
       </div>
     </AppShell>

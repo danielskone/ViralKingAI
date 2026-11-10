@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Upload } from "@/components/icons";
+import { saveThumb } from "@/lib/thumbs";
 
 /** Upload straight into the user's library (no project): kind is product, avatar, or auto (image/video). */
 export async function uploadToLibrary(file: File, userId: string, kind: "product" | "avatar" | "auto") {
@@ -23,6 +24,7 @@ export async function uploadToLibrary(file: File, userId: string, kind: "product
     await supabase.storage.from("media").remove([path]);
     throw new Error(dbErr.message);
   }
+  if (k !== "video") await saveThumb(supabase, userId, data.id, file);
   return data.id as string;
 }
 
