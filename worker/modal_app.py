@@ -58,7 +58,8 @@ gpu_image = (
         "supabase==2.22.4",
         "huggingface_hub[hf_transfer]",
     )
-    .env({"HF_HOME": MODELS_DIR, "HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    .env({"HF_HOME": MODELS_DIR, "HF_HUB_ENABLE_HF_TRANSFER": "1",
+          "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
 )
 web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "fastapi[standard]", "supabase==2.22.4"
@@ -211,6 +212,8 @@ class VideoGenerator:
 
         vae = AutoencoderKLWan.from_pretrained(VIDEO_ID, subfolder="vae", torch_dtype=torch.float32)
         self.t2v = WanPipeline.from_pretrained(VIDEO_ID, vae=vae, torch_dtype=torch.bfloat16).to("cuda")
+        # Decoding 121 frames at 720p in one pass needs more than 48 GB; decode in tiles.
+        self.t2v.vae.enable_tiling()
         self.i2v = WanImageToVideoPipeline.from_pipe(self.t2v)
         models.commit()
 
