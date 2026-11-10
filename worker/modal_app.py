@@ -135,7 +135,7 @@ class ScriptWriter:
         )
         models.commit()
 
-    def _write(self, title: str, offer: str, idea: str, has_image: bool, model_shot: bool, n: int) -> dict:
+    def _write(self, title: str, offer: str, idea: str, subject: str, n: int) -> dict:
         system = (
             "You are an award-winning commercial director writing shot prompts for the Wan 2.2 "
             "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
@@ -152,16 +152,24 @@ class ScriptWriter:
             "each step, shallow depth of field, 35mm lens, soft film grain, premium fashion "
             "commercial look."
         )
-        if has_image and model_shot:
+        if subject in ("product_model", "product_avatar"):
+            who = ("the person from the customer's avatar photo" if subject == "product_avatar"
+                   else "a fitting, attractive person")
             photo_rule = (
                 "The customer uploaded a product photo. For scene 1 ALSO write \"first_frame\": a "
-                "40-70 word image-editing instruction that turns the product photo into a "
-                "photorealistic photo of a person wearing or using this exact product (keep its "
-                "color, print, logo and details exactly the same) in the setting of the idea, "
-                "described like a fashion photo (who, pose, setting, light, framing). Scene 1's "
-                "\"prompt\" then describes that same person and setting and the motion that follows."
+                f"40-70 word image-editing instruction for a photorealistic photo of {who} wearing or "
+                "using this exact product (keep its color, print, logo and details exactly the same) "
+                "in the setting of the idea, described like a fashion photo (pose, setting, light, "
+                "framing). Scene 1's \"prompt\" then describes that same person and setting and the "
+                "motion that follows."
             )
-        elif has_image:
+        elif subject == "avatar":
+            photo_rule = (
+                "Scene 1 starts from the customer's photo of a person (their avatar). Its prompt must "
+                "describe that person performing the idea (action, expression, camera move, light); "
+                "keep their look unchanged."
+            )
+        elif subject == "product":
             photo_rule = (
                 "The customer uploaded a product photo. Scene 1 starts from that exact photo, so its "
                 "prompt must describe the product as the hero of the shot and the motion around it "
@@ -205,10 +213,21 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                 .eq("kind", "image").order("created_at").execute().data
             )
             n = int(job["input"].get("scene_count", 3))
-            idea = (job["input"].get("idea") or "").strip()
-            model_shot = bool(job["input"].get("model_shot"))
-            script = self._write(project["title"], project.get("offer_description") or "", idea,
-                                 bool(images), model_shot, n)
+            inp = job["input"]
+            idea = (inp.get("idea") or "").strip()
+            product = inp.get("product_path")
+            avatar = inp.get("avatar_path")
+            if product:
+                first_image = product
+                model_shot = bool(inp.get("model_shot")) or bool(avatar)
+                subject = ("product_avatar" if avatar else "product_model") if model_shot else "product"
+            elif avatar:
+                first_image, model_shot, subject = avatar, False, "avatar"
+            else:  # older projects: first uploaded photo
+                first_image = images[0]["storage_path"] if images else None
+                model_shot = bool(inp.get("model_shot")) and bool(first_image)
+                subject = ("product_model" if model_shot else "product") if first_image else "none"
+            script = self._write(project["title"], project.get("offer_description") or "", idea, subject, n)
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.
@@ -224,8 +243,9 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                         "prompt": scene["prompt"],
                         "caption": scene.get("caption", ""),
                         "aspect_ratio": project["aspect_ratio"],
-                        "image_path": images[0]["storage_path"] if (i == 0 and images) else None,
-                        "model_shot": (scene.get("first_frame") or None) if (i == 0 and images and model_shot) else None,
+                        "image_path": first_image if i == 0 else None,
+                        "avatar_path": avatar if (i == 0 and product and model_shot) else None,
+                        "model_shot": (scene.get("first_frame") or None) if (i == 0 and model_shot) else None,
                     },
                 }
                 res = sb.table("generation_jobs").upsert(
@@ -346,9 +366,23 @@ class VideoGenerator:
                 image = self._fit(Image.open(io.BytesIO(raw)), w, h)
                 if inp.get("model_shot"):
                     # Put the product on a person first, then animate that photo.
+                    instruction = inp["model_shot"]
+                    if inp.get("avatar_path"):
+                        # Avatar on the left, product on the right; ask for one merged photo.
+                        face = Image.open(io.BytesIO(sb.storage.from_("media").download(inp["avatar_path"])))
+                        half = w // 2
+                        board = Image.new("RGB", (w, h), "white")
+                        board.paste(self._fit(face, half, h), (0, 0))
+                        board.paste(self._fit(Image.open(io.BytesIO(raw)), w - half, h), (half, 0))
+                        image = board
+                        instruction = (
+                            "The left half shows a person and the right half shows a product. Create ONE "
+                            "single full-frame photo (no split screen, no collage) of that same person, "
+                            "same face and hair, wearing or using that exact product. " + instruction
+                        )
                     buf = io.BytesIO()
                     image.save(buf, "PNG")
-                    edited = ImageEditor().edit.remote(buf.getvalue(), inp["model_shot"])
+                    edited = ImageEditor().edit.remote(buf.getvalue(), instruction)
                     image = Image.open(io.BytesIO(edited)).convert("RGB").resize((w, h), Image.LANCZOS)
                     frame_path = f"{job['owner_id']}/{project_id}/generated/{job_id}-frame.png"
                     sb.storage.from_("media").upload(frame_path, edited, {"content-type": "image/png", "upsert": "true"})

@@ -1,57 +1,94 @@
 import Link from "next/link";
-import Header from "@/components/Header";
+import AppShell from "@/components/AppShell";
+import Composer from "@/components/Composer";
 import { createClient } from "@/lib/supabase/server";
-import { createProject } from "@/app/actions";
+import { isVideo, withUrls } from "@/lib/library";
+import { Crown, Film } from "@/components/icons";
+
+const STATUS: Record<string, string> = { draft: "Draft", generating: "Generating", ready: "Ready", failed: "Failed" };
 
 export default async function Dashboard() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  const { data: projects } = await supabase
-    .from("projects")
-    .select("id, title, offer_description, aspect_ratio, status, updated_at")
-    .order("updated_at", { ascending: false });
+
+  const [{ data: library }, { data: projects }, { data: media }] = await Promise.all([
+    supabase.from("assets").select("id, kind, storage_path, file_name").in("kind", ["product", "avatar"]).order("created_at", { ascending: false }),
+    supabase.from("projects").select("id, title, aspect_ratio, status, updated_at").order("updated_at", { ascending: false }).limit(24),
+    supabase.from("assets").select("project_id, kind, storage_path, mime_type, created_at").in("kind", ["generated_clip", "image"]).not("project_id", "is", null).order("created_at", { ascending: false }),
+  ]);
+
+  const lib = await withUrls(supabase, library ?? []);
+  // Cover for each project: newest generated clip, else first photo.
+  const covers = new Map<string, { storage_path: string; kind: string; mime_type: string | null }>();
+  for (const m of media ?? []) {
+    const cur = covers.get(m.project_id!);
+    if (!cur || (cur.kind !== "generated_clip" && m.kind === "generated_clip")) covers.set(m.project_id!, m);
+  }
+  const coverList = await withUrls(supabase, [...covers.entries()].map(([pid, c]) => ({ ...c, pid })));
+  const coverBy = new Map(coverList.map((c) => [c.pid, c]));
 
   return (
-    <>
-      <Header email={user?.email} />
-      <main className="mx-auto max-w-6xl space-y-8 px-4 py-8">
-        <section className="rounded-2xl border border-border bg-card p-6">
-          <h2 className="mb-1 text-xl font-semibold">Create a video</h2>
-          <p className="mb-4 text-sm text-muted">Describe the offer. You&apos;ll add photos and your logo on the next screen.</p>
-          <form action={createProject} className="grid gap-3 sm:grid-cols-[1fr_2fr_auto_auto]">
-            <input name="title" className="input" placeholder="Project name, e.g. Summer sale" required />
-            <input name="offer_description" className="input" placeholder="What are you promoting? e.g. 20% off all smoothies this week" />
-            <select name="aspect_ratio" className="input" defaultValue="9:16">
-              <option value="9:16">Vertical 9:16</option>
-              <option value="16:9">Landscape 16:9</option>
-              <option value="1:1">Square 1:1</option>
-            </select>
-            <button className="btn">Create</button>
-          </form>
+    <AppShell>
+      <div className="relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(60%_60%_at_50%_0%,rgba(212,175,55,0.18),transparent_70%)]" />
+        <section className="relative mx-auto max-w-3xl px-4 pb-10 pt-14 text-center sm:pt-20">
+          <div className="mx-auto mb-5 flex w-fit items-center gap-2 rounded-full border border-gold/30 bg-gold/5 px-3 py-1 text-xs text-gold-light">
+            <Crown className="h-4 w-4" /> Your own AI video studio
+          </div>
+          <h1 className="font-display text-4xl font-extrabold leading-[1.05] tracking-tight sm:text-6xl">
+            Describe your ad.<br /><span className="gold-text">We make it viral.</span>
+          </h1>
+          <p className="mx-auto mt-4 max-w-xl text-muted">
+            Pick a product and an avatar, describe the scene, and your AI writes the script and films it.
+          </p>
+          <div className="mt-8 text-left">
+            <Composer
+              userId={user!.id}
+              products={lib.filter((i) => i.kind === "product")}
+              avatars={lib.filter((i) => i.kind === "avatar")}
+            />
+          </div>
         </section>
+      </div>
 
-        <section>
-          <h2 className="mb-4 text-xl font-semibold">Your projects</h2>
-          {!projects?.length ? (
-            <p className="text-sm text-muted">No projects yet.</p>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {projects.map((p) => (
-                <Link key={p.id} href={`/projects/${p.id}`} className="rounded-xl border border-border bg-card p-4 hover:border-accent">
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="font-semibold">{p.title}</h3>
-                    <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted">{p.status}</span>
+      <section className="mx-auto max-w-6xl px-4 pb-16">
+        <div className="mb-4 flex items-end justify-between">
+          <h2 className="font-display text-2xl font-bold">Your projects</h2>
+          <Link href="/media?tab=generations" className="text-sm text-muted hover:text-gold">All generations →</Link>
+        </div>
+        {!projects?.length ? (
+          <div className="panel p-10 text-center text-muted">Your ads will appear here. Describe your first one above.</div>
+        ) : (
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+            {projects.map((p) => {
+              const c = coverBy.get(p.id);
+              return (
+                <Link key={p.id} href={`/projects/${p.id}`} className="group overflow-hidden rounded-2xl border border-border bg-card transition hover:border-gold/60">
+                  <div className="relative aspect-[4/5] bg-panel">
+                    {c?.url && isVideo(c.kind, c.mime_type) ? (
+                      <video src={c.url} muted loop playsInline autoPlay className="h-full w-full object-cover" />
+                    ) : c?.url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={c.url} alt="" className="h-full w-full object-cover transition group-hover:scale-[1.03]" />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-muted"><Film className="h-8 w-8" /></div>
+                    )}
+                    <span className={"absolute left-3 top-3 rounded-full px-2.5 py-1 text-[11px] font-semibold backdrop-blur " +
+                      (p.status === "ready" ? "gold-bg text-black" : p.status === "failed" ? "bg-black/60 text-danger" : "bg-black/60 text-foreground")}>
+                      {p.status === "generating" && <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-gold" />}
+                      {STATUS[p.status] ?? p.status}
+                    </span>
+                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent p-3 pt-10">
+                      <h3 className="truncate font-semibold">{p.title}</h3>
+                      <p className="text-xs text-muted">{p.aspect_ratio} · {new Date(p.updated_at).toLocaleDateString()}</p>
+                    </div>
                   </div>
-                  {p.offer_description && <p className="mt-2 line-clamp-2 text-sm text-muted">{p.offer_description}</p>}
-                  <p className="mt-3 text-xs text-muted">
-                    {p.aspect_ratio} · updated {new Date(p.updated_at).toLocaleDateString()}
-                  </p>
                 </Link>
-              ))}
-            </div>
-          )}
-        </section>
-      </main>
-    </>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </AppShell>
   );
 }

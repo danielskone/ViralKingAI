@@ -57,7 +57,7 @@ export default function Uploader({ projectId, userId }: { projectId: string; use
   }
 
   return (
-    <div className="rounded-2xl border border-dashed border-border bg-card p-6">
+    <div className="rounded-2xl border border-dashed border-border bg-card/60 p-5 transition hover:border-gold/60">
       <label className="flex cursor-pointer flex-col items-center gap-2 text-center">
         <span className="font-semibold">{busy ? "Uploading…" : "Upload photos, video, audio or a logo"}</span>
         <span className="text-sm text-muted">Click to choose files (up to 500 MB each)</span>
@@ -77,7 +77,7 @@ export default function Uploader({ projectId, userId }: { projectId: string; use
         <input type="checkbox" checked={asLogo} onChange={(e) => setAsLogo(e.target.checked)} />
         These files are my logo
       </label>
-      {msg && <p className="mt-3 text-center text-sm text-accent">{msg}</p>}
+      {msg && <p className="mt-3 text-center text-sm text-danger">{msg}</p>}
     </div>
   );
 }
