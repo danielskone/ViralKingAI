@@ -115,7 +115,7 @@ def _settle_project(sb, project_id: str):
 # --------------------------------------------------------------------------- script
 
 
-@app.cls(gpu="L4", image=gpu_image, volumes={MODELS_DIR: models}, secrets=secrets,
+@app.cls(gpu=["L4", "A10G", "L40S"], image=gpu_image, volumes={MODELS_DIR: models}, secrets=secrets,
          timeout=600, scaledown_window=120)
 class ScriptWriter:
     @modal.enter()
@@ -202,7 +202,7 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
 # --------------------------------------------------------------------------- video
 
 
-@app.cls(gpu=os.environ.get("VIDEO_GPU", "L40S"), image=gpu_image, volumes={MODELS_DIR: models},
+@app.cls(gpu=["L40S", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
          secrets=secrets, timeout=1800, scaledown_window=120, max_containers=2)
 class VideoGenerator:
     @modal.enter()
