@@ -211,10 +211,13 @@ class VideoGenerator:
         from diffusers import AutoencoderKLWan, WanImageToVideoPipeline, WanPipeline
 
         vae = AutoencoderKLWan.from_pretrained(VIDEO_ID, subfolder="vae", torch_dtype=torch.float32)
-        self.t2v = WanPipeline.from_pretrained(VIDEO_ID, vae=vae, torch_dtype=torch.bfloat16).to("cuda")
-        # Decoding 121 frames at 720p in one pass needs more than 48 GB; decode in tiles.
-        self.t2v.vae.enable_tiling()
+        self.t2v = WanPipeline.from_pretrained(VIDEO_ID, vae=vae, torch_dtype=torch.bfloat16)
         self.i2v = WanImageToVideoPipeline.from_pipe(self.t2v)
+        # Keep only the model that is running on the GPU (the 11 GB text encoder is
+        # parked in RAM while the video model works) and decode the video in tiles.
+        # Both pipelines share the same modules, so the offload hooks cover both.
+        self.t2v.enable_model_cpu_offload()
+        self.t2v.vae.enable_tiling()
         models.commit()
 
     @staticmethod
@@ -282,6 +285,13 @@ class VideoGenerator:
             raise
         finally:
             _settle_project(sb, project_id)
+            # Release GPU memory so a failed job cannot starve the next one.
+            import gc
+
+            import torch
+
+            gc.collect()
+            torch.cuda.empty_cache()
 
 
 # --------------------------------------------------------------------------- web entry point
