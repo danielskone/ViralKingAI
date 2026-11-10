@@ -69,7 +69,7 @@ export async function startGeneration(formData: FormData) {
 
   const { data: job, error } = await supabase
     .from("generation_jobs")
-    .insert({ project_id: projectId, job_type: "script", input: { scene_count: sceneCount, idea } })
+    .insert({ project_id: projectId, job_type: "script", input: { scene_count: sceneCount, idea, model_shot: formData.get("model_shot") === "on" } })
     .select("id")
     .single();
   if (error) throw new Error(error.message);

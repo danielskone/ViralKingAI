@@ -37,6 +37,7 @@ export default async function ProjectPage({
   const busy = run.some((j) => j.status === "queued" || j.status === "running");
   const lastScript = run.find((j) => j.job_type === "script");
   const lastIdea = String((lastScript?.input as { idea?: string } | null)?.idea ?? "");
+  const lastModelShot = (lastScript?.input as { model_shot?: boolean } | null)?.model_shot ?? true;
   const lastCount = String((lastScript?.input as { scene_count?: number } | null)?.scene_count ?? 3);
   const script = (lastScript?.status === "succeeded" ? lastScript.output : undefined) as
     | { hook?: string; cta?: string; scenes?: { prompt: string; caption?: string }[] }
@@ -135,6 +136,10 @@ export default async function ProjectPage({
               className="input w-full resize-y"
               placeholder="Describe your video (optional). Example: A confident young man wearing this shirt walks through a snowy downtown street at night, Christmas lights glowing, slow cinematic tracking shot."
             />
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input type="checkbox" name="model_shot" defaultChecked={lastModelShot} disabled={busy} key={String(lastModelShot)} />
+              Put my product on a model (best for clothing and accessories)
+            </label>
           </form>
           {genError && <p className="text-sm text-accent">{genError}</p>}
           {script?.scenes?.length ? (

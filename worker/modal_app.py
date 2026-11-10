@@ -26,6 +26,7 @@ import modal
 APP_NAME = "viralking-ai"
 LLM_ID = "Qwen/Qwen2.5-7B-Instruct"
 VIDEO_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+EDIT_ID = "Qwen/Qwen-Image-Edit"  # Apache 2.0; puts the product on a model for the first frame
 MODELS_DIR = "/models"
 
 # Wan 2.2 TI2V-5B native resolution is 1280x704 (or 704x1280), 24 fps.
@@ -134,7 +135,7 @@ class ScriptWriter:
         )
         models.commit()
 
-    def _write(self, title: str, offer: str, idea: str, has_image: bool, n: int) -> dict:
+    def _write(self, title: str, offer: str, idea: str, has_image: bool, model_shot: bool, n: int) -> dict:
         system = (
             "You are an award-winning commercial director writing shot prompts for the Wan 2.2 "
             "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
@@ -151,12 +152,23 @@ class ScriptWriter:
             "each step, shallow depth of field, 35mm lens, soft film grain, premium fashion "
             "commercial look."
         )
-        photo_rule = (
-            "The customer uploaded a product photo. Scene 1 starts from that exact photo, so its "
-            "prompt must describe the product as the hero of the shot and the motion around it "
-            "(camera move, light, subtle product movement); do not invent a different product."
-            if has_image else "No photo was uploaded; describe every scene fully."
-        )
+        if has_image and model_shot:
+            photo_rule = (
+                "The customer uploaded a product photo. For scene 1 ALSO write \"first_frame\": a "
+                "40-70 word image-editing instruction that turns the product photo into a "
+                "photorealistic photo of a person wearing or using this exact product (keep its "
+                "color, print, logo and details exactly the same) in the setting of the idea, "
+                "described like a fashion photo (who, pose, setting, light, framing). Scene 1's "
+                "\"prompt\" then describes that same person and setting and the motion that follows."
+            )
+        elif has_image:
+            photo_rule = (
+                "The customer uploaded a product photo. Scene 1 starts from that exact photo, so its "
+                "prompt must describe the product as the hero of the shot and the motion around it "
+                "(camera move, light, subtle product movement); do not invent a different product."
+            )
+        else:
+            photo_rule = "No photo was uploaded; describe every scene fully."
         user = f"""Project: "{title}". Business / offer: "{offer or title}".
 Customer's idea for the video: "{idea or 'not given; choose a strong, scroll-stopping concept for this offer'}".
 {photo_rule}
@@ -166,7 +178,7 @@ For each scene give:
 - "prompt": 70-110 words, in the style of this example: "{example}"
 - "caption": on-screen text for that scene, max 8 words.
 Also give "hook" (max 8 words) and "cta" (max 6 words).
-JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str}}]}}"""
+JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "first_frame": str (scene 1 only, when asked)}}]}}"""
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         ids = self.tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt").to("cuda")
         out = self.model.generate(ids, max_new_tokens=1600, temperature=0.8, top_p=0.9, do_sample=True)
@@ -194,7 +206,9 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
             )
             n = int(job["input"].get("scene_count", 3))
             idea = (job["input"].get("idea") or "").strip()
-            script = self._write(project["title"], project.get("offer_description") or "", idea, bool(images), n)
+            model_shot = bool(job["input"].get("model_shot"))
+            script = self._write(project["title"], project.get("offer_description") or "", idea,
+                                 bool(images), model_shot, n)
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.
@@ -211,6 +225,7 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                         "caption": scene.get("caption", ""),
                         "aspect_ratio": project["aspect_ratio"],
                         "image_path": images[0]["storage_path"] if (i == 0 and images) else None,
+                        "model_shot": (scene.get("first_frame") or None) if (i == 0 and images and model_shot) else None,
                     },
                 }
                 res = sb.table("generation_jobs").upsert(
@@ -222,6 +237,37 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
             _finish(sb, job_id, error=e, gpu_seconds=round(time.time() - t0, 1))
             _settle_project(sb, project_id)
             raise
+
+
+# --------------------------------------------------------------------------- image edit
+
+
+@app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
+         timeout=1500, scaledown_window=60, max_containers=2)
+class ImageEditor:
+    @modal.enter()
+    def load(self):
+        import torch
+        from diffusers import QwenImageEditPipeline
+
+        self.pipe = QwenImageEditPipeline.from_pretrained(EDIT_ID, torch_dtype=torch.bfloat16).to("cuda")
+        models.commit()
+
+    @modal.method()
+    def edit(self, image_png: bytes, prompt: str) -> bytes:
+        """Turn a product photo into a photo of a person wearing/using it. The input is
+        already padded to the video's aspect ratio, so the output keeps that ratio."""
+        import torch
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_png)).convert("RGB")
+        out = self.pipe(
+            image=img, prompt=prompt, negative_prompt=" ", true_cfg_scale=4.0,
+            num_inference_steps=40, generator=torch.Generator("cuda").manual_seed(0),
+        ).images[0]
+        buf = io.BytesIO()
+        out.save(buf, "PNG")
+        return buf.getvalue()
 
 
 # --------------------------------------------------------------------------- video
@@ -298,6 +344,14 @@ class VideoGenerator:
             if inp.get("image_path"):
                 raw = sb.storage.from_("media").download(inp["image_path"])
                 image = self._fit(Image.open(io.BytesIO(raw)), w, h)
+                if inp.get("model_shot"):
+                    # Put the product on a person first, then animate that photo.
+                    buf = io.BytesIO()
+                    image.save(buf, "PNG")
+                    edited = ImageEditor().edit.remote(buf.getvalue(), inp["model_shot"])
+                    image = Image.open(io.BytesIO(edited)).convert("RGB").resize((w, h), Image.LANCZOS)
+                    frame_path = f"{job['owner_id']}/{project_id}/generated/{job_id}-frame.png"
+                    sb.storage.from_("media").upload(frame_path, edited, {"content-type": "image/png", "upsert": "true"})
                 frames = self.i2v(image=image, **common).frames[0]
             else:
                 frames = self.t2v(**common).frames[0]
