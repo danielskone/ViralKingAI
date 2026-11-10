@@ -8,7 +8,7 @@ type Job = {
   id: string;
   job_type: string;
   status: string;
-  input: { scene_index?: number; caption?: string } | null;
+  input: { scene_index?: number; caption?: string; script_job_id?: string } | null;
   error: string | null;
   created_at: string;
 };
@@ -21,11 +21,20 @@ const LABEL: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+/** Jobs from the most recent Generate click only: its script job plus the scenes it queued. */
+export function latestRun<T extends { id: string; job_type: string; input: unknown }>(jobs: T[]): T[] {
+  const script = jobs.find((j) => j.job_type === "script"); // jobs are newest first
+  if (!script) return jobs;
+  return jobs.filter(
+    (j) => j.id === script.id || (j.input as { script_job_id?: string } | null)?.script_job_id === script.id,
+  );
+}
+
 export default function JobsPanel({ projectId, initial }: { projectId: string; initial: Job[] }) {
   const router = useRouter();
   const [jobs, setJobs] = useState<Job[]>(initial);
   const lastDone = useRef(initial.filter((j) => j.status === "succeeded").length);
-  const active = jobs.some((j) => j.status === "queued" || j.status === "running");
+  const active = latestRun(jobs).some((j) => j.status === "queued" || j.status === "running");
 
   useEffect(() => {
     if (!active) return;
@@ -48,10 +57,11 @@ export default function JobsPanel({ projectId, initial }: { projectId: string; i
     return () => clearInterval(t);
   }, [active, projectId, router]);
 
-  if (!jobs.length) return null;
+  const shown = latestRun(jobs).slice().reverse(); // script first, then scenes in order
+  if (!shown.length) return null;
   return (
     <ul className="space-y-2 text-sm">
-      {jobs.map((j) => (
+      {shown.map((j) => (
         <li key={j.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
           <span>
             {j.job_type === "script"

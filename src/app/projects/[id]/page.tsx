@@ -3,7 +3,7 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import Uploader from "@/components/Uploader";
 import { createClient } from "@/lib/supabase/server";
-import JobsPanel from "@/components/JobsPanel";
+import JobsPanel, { latestRun } from "@/components/JobsPanel";
 import { deleteAsset, deleteProject, startGeneration } from "@/app/actions";
 
 export default async function ProjectPage({
@@ -32,8 +32,11 @@ export default async function ProjectPage({
     .eq("project_id", id)
     .order("created_at", { ascending: false })
     .limit(20);
-  const busy = jobs?.some((j) => j.status === "queued" || j.status === "running") ?? false;
-  const script = jobs?.find((j) => j.job_type === "script" && j.status === "succeeded")?.output as
+  const run = latestRun(jobs ?? []);
+  const busy = run.some((j) => j.status === "queued" || j.status === "running");
+  const lastScript = run.find((j) => j.job_type === "script");
+  const lastCount = String((lastScript?.input as { scene_count?: number } | null)?.scene_count ?? 3);
+  const script = (lastScript?.status === "succeeded" ? lastScript.output : undefined) as
     | { hook?: string; cta?: string; scenes?: { prompt: string; caption?: string }[] }
     | undefined;
 
@@ -111,7 +114,7 @@ export default async function ProjectPage({
             </div>
             <form action={startGeneration} className="flex items-center gap-2">
               <input type="hidden" name="project_id" value={project.id} />
-              <select name="scene_count" defaultValue="3" className="input w-auto" disabled={busy}>
+              <select key={lastCount} name="scene_count" defaultValue={lastCount} className="input w-auto" disabled={busy}>
                 {[1, 2, 3, 4, 5].map((n) => (
                   <option key={n} value={n}>{n} scene{n > 1 ? "s" : ""}</option>
                 ))}
@@ -134,7 +137,7 @@ export default async function ProjectPage({
               {script.cta && <p><span className="text-muted">Call to action:</span> {script.cta}</p>}
             </div>
           ) : null}
-          <JobsPanel projectId={project.id} initial={(jobs ?? []).map(({ output: _o, ...j }) => j)} />
+          <JobsPanel key={lastScript?.id ?? "none"} projectId={project.id} initial={(jobs ?? []).map(({ output: _o, ...j }) => j)} />
         </section>
       </main>
     </>
