@@ -1,37 +1,85 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0b0b10;
-  --foreground: #ededf2;
-  --muted: #9a9aab;
-  --card: #15151d;
-  --border: #262633;
-  --accent: #ff3d6e;
+  --background: #0a0a0a;
+  --panel: #0f0f0f;
+  --foreground: #fafafa;
+  --muted: #a1a1a1;
+  --card: #151515;
+  --card-hover: #1c1c1c;
+  --border: #262626;
+  --gold: #d4af37;
+  --gold-light: #f3d77b;
+  --gold-dark: #a67c1a;
+  --accent: #d4af37;
+  --danger: #f87171;
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-panel: var(--panel);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-card: var(--card);
+  --color-card-hover: var(--card-hover);
   --color-border: var(--border);
   --color-accent: var(--accent);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-gold: var(--gold);
+  --color-gold-light: var(--gold-light);
+  --color-gold-dark: var(--gold-dark);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-inter-tight);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter), system-ui, sans-serif;
 }
 
+::selection { background: rgb(212 175 55 / 0.35); }
+
+.font-display { font-family: var(--font-inter-tight), var(--font-inter), sans-serif; }
+
+.gold-text {
+  background: linear-gradient(100deg, var(--gold-light), var(--gold) 45%, var(--gold-dark));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.gold-bg { background: linear-gradient(135deg, var(--gold-light), var(--gold) 50%, var(--gold-dark)); }
+.gold-ring { box-shadow: 0 0 0 1px rgb(212 175 55 / 0.45), 0 10px 40px -12px rgb(212 175 55 / 0.35); }
+
 .input {
-  @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent;
+  @apply w-full rounded-xl border border-border bg-panel px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted/70 outline-none transition focus:border-gold/70;
 }
 .btn {
-  @apply inline-flex items-center justify-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50;
+  @apply inline-flex items-center justify-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50;
+  background: linear-gradient(135deg, var(--gold-light), var(--gold) 50%, var(--gold-dark));
 }
 .btn-ghost {
-  @apply inline-flex items-center justify-center rounded-lg border border-border px-3 py-2 text-sm hover:bg-card;
+  @apply inline-flex items-center justify-center gap-2 rounded-full border border-border px-4 py-2 text-sm text-foreground transition hover:border-gold/60 hover:bg-card;
 }
+.chip {
+  @apply inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground/90 transition hover:border-gold/60;
+}
+.chip-on { @apply border-gold/70 bg-gold/10 text-gold-light; }
+.tab {
+  @apply rounded-full px-4 py-2 text-sm text-muted transition hover:text-foreground;
+}
+.tab-on { @apply bg-foreground text-black hover:text-black; }
+.nav-item {
+  @apply flex items-center gap-3 rounded-xl px-3 py-2 text-sm text-foreground/80 transition hover:bg-card hover:text-foreground;
+}
+.nav-on { @apply bg-card text-foreground; box-shadow: inset 2px 0 0 var(--gold); }
+.eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-muted; }
+.panel { @apply rounded-2xl border border-border bg-card; }
+
+@keyframes drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(4%, -3%, 0) scale(1.08); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+.tile-bg { animation: drift 14s ease-in-out infinite; animation-delay: var(--d, 0s); }
+@media (prefers-reduced-motion: reduce) { .tile-bg { animation: none; } }

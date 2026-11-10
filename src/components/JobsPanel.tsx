@@ -54,14 +54,14 @@ export default function JobsPanel({ projectId, initial }: { projectId: string; i
   return (
     <ul className="space-y-2 text-sm">
       {shown.map((j) => (
-        <li key={j.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+        <li key={j.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-panel px-3.5 py-2.5">
           <span>
             {j.job_type === "script"
               ? "Writing script and scenes"
               : `Scene ${(j.input?.scene_index ?? 0) + 1}${j.input?.caption ? ` · ${j.input.caption}` : ""}`}
           </span>
-          <span className={j.status === "failed" ? "text-accent" : "text-muted"} title={j.error ?? ""}>
-            {(j.status === "running" || j.status === "queued") && <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-accent" />}
+          <span className={j.status === "failed" ? "text-danger" : j.status === "succeeded" ? "text-gold" : "text-muted"} title={j.error ?? ""}>
+            {(j.status === "running" || j.status === "queued") && <span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-gold" />}
             {LABEL[j.status] ?? j.status}
           </span>
         </li>
