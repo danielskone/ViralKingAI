@@ -3,7 +3,8 @@ import Link from "next/link";
 import Header from "@/components/Header";
 import Uploader from "@/components/Uploader";
 import { createClient } from "@/lib/supabase/server";
-import JobsPanel, { latestRun } from "@/components/JobsPanel";
+import JobsPanel from "@/components/JobsPanel";
+import { latestRun } from "@/lib/jobs";
 import { deleteAsset, deleteProject, startGeneration } from "@/app/actions";
 
 export default async function ProjectPage({

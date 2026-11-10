@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { latestRun } from "@/lib/jobs";
 
 type Job = {
   id: string;
@@ -20,15 +21,6 @@ const LABEL: Record<string, string> = {
   failed: "Failed",
   cancelled: "Cancelled",
 };
-
-/** Jobs from the most recent Generate click only: its script job plus the scenes it queued. */
-export function latestRun<T extends { id: string; job_type: string; input: unknown }>(jobs: T[]): T[] {
-  const script = jobs.find((j) => j.job_type === "script"); // jobs are newest first
-  if (!script) return jobs;
-  return jobs.filter(
-    (j) => j.id === script.id || (j.input as { script_job_id?: string } | null)?.script_job_id === script.id,
-  );
-}
 
 export default function JobsPanel({ projectId, initial }: { projectId: string; initial: Job[] }) {
   const router = useRouter();
