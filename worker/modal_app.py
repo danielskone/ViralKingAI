@@ -32,7 +32,9 @@ MODELS_DIR = "/models"
 SIZES = {"9:16": (704, 1280), "16:9": (1280, 704), "1:1": (960, 960)}
 FPS = 24
 NUM_FRAMES = 121  # ~5 seconds; must be 4k+1
-STEPS = int(os.environ.get("WAN_STEPS", "40"))
+STEPS = int(os.environ.get("WAN_STEPS", "30"))
+VIDEO_TIMEOUT = 2400  # seconds Modal lets one clip run
+RENDER_BUDGET = VIDEO_TIMEOUT - 240  # stop early so the job is marked failed, not left "running"
 NEGATIVE = (
     "blurry, low quality, distorted, deformed hands, extra fingers, watermark, text artifacts, "
     "jpeg artifacts, flicker, static frame, oversaturated, ugly, disfigured"
@@ -202,8 +204,8 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
 # --------------------------------------------------------------------------- video
 
 
-@app.cls(gpu=["L40S", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
-         secrets=secrets, timeout=1800, scaledown_window=120, max_containers=2)
+@app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
+         secrets=secrets, timeout=VIDEO_TIMEOUT, scaledown_window=120, max_containers=2)
 class VideoGenerator:
     @modal.enter()
     def load(self):
@@ -213,12 +215,26 @@ class VideoGenerator:
         vae = AutoencoderKLWan.from_pretrained(VIDEO_ID, subfolder="vae", torch_dtype=torch.float32)
         self.t2v = WanPipeline.from_pretrained(VIDEO_ID, vae=vae, torch_dtype=torch.bfloat16)
         self.i2v = WanImageToVideoPipeline.from_pipe(self.t2v)
-        # Keep only the model that is running on the GPU (the 11 GB text encoder is
-        # parked in RAM while the video model works). Both pipelines share the same
-        # modules, so the offload hooks cover both. No VAE tiling: in diffusers 0.35
-        # the tiled path skips the Wan 2.2 VAE's patchify step and crashes.
-        self.t2v.enable_model_cpu_offload()
+        # 80 GB GPUs hold everything at once, so no CPU offload (offload made a
+        # 5-second clip take 30+ minutes). Both pipelines share the same modules.
+        # No VAE tiling: in diffusers 0.35 the tiled path skips the Wan 2.2 VAE's
+        # patchify step and crashes.
+        self.t2v.to("cuda")
         models.commit()
+
+    @staticmethod
+    def _deadline(t0: float):
+        """Abort a render that would hit Modal's hard timeout, which kills the
+        container before the job can be marked failed."""
+
+        def check(_pipe, step, _t, kwargs):
+            elapsed = time.time() - t0
+            print(f"step {step + 1}/{STEPS} at {elapsed:.0f}s", flush=True)
+            if elapsed > RENDER_BUDGET:
+                raise TimeoutError(f"Render took longer than {RENDER_BUDGET // 60} minutes")
+            return kwargs
+
+        return check
 
     @staticmethod
     def _fit(img, w: int, h: int):
@@ -255,6 +271,7 @@ class VideoGenerator:
             common = dict(
                 prompt=inp["prompt"], negative_prompt=NEGATIVE, height=h, width=w,
                 num_frames=NUM_FRAMES, guidance_scale=5.0, num_inference_steps=STEPS,
+                callback_on_step_end=self._deadline(t0), callback_on_step_end_tensor_inputs=[],
             )
             if inp.get("image_path"):
                 raw = sb.storage.from_("media").download(inp["image_path"])
