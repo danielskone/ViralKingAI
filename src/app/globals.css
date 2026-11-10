@@ -1,11 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0b0b10;
-  --foreground: #ededf2;
-  --muted: #9a9aab;
-  --card: #15151d;
-  --border: #262633;
+  --background: #000000;
+  --foreground: #f2f2f5;
+  --muted: #9a9aa8;
+  --card: #0e0e12;
+  --border: #22222b;
   --accent: #ff3d6e;
 }
 
@@ -18,7 +18,10 @@
   --color-accent: var(--accent);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-inter-tight);
 }
+
+html { scroll-behavior: smooth; }
 
 body {
   background: var(--background);
@@ -27,11 +30,41 @@ body {
 }
 
 .input {
-  @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:border-accent;
+  @apply w-full rounded-xl border border-border bg-black px-3.5 py-2.5 text-sm outline-none transition focus:border-white/40;
 }
 .btn {
-  @apply inline-flex items-center justify-center rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50;
+  @apply inline-flex items-center justify-center rounded-full bg-white px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-white/85 disabled:opacity-50;
 }
 .btn-ghost {
-  @apply inline-flex items-center justify-center rounded-lg border border-border px-3 py-2 text-sm hover:bg-card;
+  @apply inline-flex items-center justify-center rounded-full border border-white/15 px-4 py-2 text-sm text-white/80 transition hover:border-white/40 hover:text-white;
+}
+.pill {
+  @apply inline-flex items-center justify-center rounded-full bg-white px-7 py-3.5 text-base font-medium text-black shadow-[0_10px_40px_rgba(0,0,0,0.5)] transition hover:scale-[1.03] hover:bg-white/90;
+}
+.pill-ghost {
+  @apply inline-flex items-center justify-center rounded-full border border-white/20 bg-black/30 px-4 py-2 text-sm text-white backdrop-blur transition hover:border-white/50;
+}
+.eyebrow {
+  @apply text-sm font-medium uppercase tracking-[0.2em] text-accent;
+}
+.section-title {
+  @apply mt-3 max-w-2xl font-display text-3xl font-semibold tracking-tight text-white sm:text-5xl;
+}
+
+/* Mosaic "clips": slow drift so the wall feels like playing video. */
+@keyframes drift {
+  0%   { transform: translate3d(0, 0, 0) scale(1); }
+  50%  { transform: translate3d(-6%, 4%, 0) scale(1.12); }
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+}
+.tile-bg {
+  animation: drift 14s ease-in-out infinite;
+  animation-delay: var(--d, 0s);
+  will-change: transform;
+  filter: saturate(1.35) brightness(1.5);
+}
+.tile { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-bg { animation: none; }
 }
