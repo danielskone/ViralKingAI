@@ -28,5 +28,7 @@ jobs:
       - run: modal deploy worker/modal_app.py
       - if: ${{ inputs.smoke_test }}
         run: modal run worker/modal_app.py::talk_smoke
+      # Pre-download all model weights into the volume (CPU; quick once cached).
+      - run: modal run worker/modal_app.py::warm_models
       # Voice preview clips for the Voice menu (CPU, skips any that already exist).
       - run: modal run worker/modal_app.py::make_voice_samples

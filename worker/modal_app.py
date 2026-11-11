@@ -34,7 +34,7 @@ SIZES = {"9:16": (704, 1280), "16:9": (1280, 704), "1:1": (960, 960)}
 FPS = 24
 NUM_FRAMES = 121  # ~5 seconds; must be 4k+1
 STEPS = int(os.environ.get("WAN_STEPS", "40"))
-VIDEO_TIMEOUT = 2400  # seconds Modal lets one clip run
+VIDEO_TIMEOUT = 3600  # seconds Modal lets one clip run (photo edit + animation + voice)
 RENDER_BUDGET = VIDEO_TIMEOUT - 240  # stop early so the job is marked failed, not left "running"
 # Wan's own recommended negative prompt (the model was trained with it), plus English extras.
 NEGATIVE = (
@@ -123,6 +123,17 @@ def _finish(sb, job_id: str, *, output=None, error=None, gpu_seconds=None):
             "gpu_seconds": gpu_seconds,
         }
     ).eq("id", job_id).execute()
+
+
+def _stage(sb, job_id: str, stage: str, t0: float):
+    """Record how far a running job has got, so a slow or stuck step is visible in the database."""
+    try:
+        sb.table("generation_jobs").update(
+            {"output": {"stage": stage, "seconds": round(time.time() - t0)}}
+        ).eq("id", job_id).execute()
+    except Exception as e:  # noqa: BLE001
+        print(f"stage update failed: {e!r}", flush=True)
+    print(f"[{job_id}] {stage} at {time.time() - t0:.0f}s", flush=True)
 
 
 def _settle_project(sb, project_id: str):
@@ -325,7 +336,7 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
 
 
 @app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
-         timeout=1500, scaledown_window=60, max_containers=2)
+         timeout=2400, scaledown_window=60, max_containers=2)
 class ImageEditor:
     @modal.enter()
     def load(self):
@@ -416,6 +427,7 @@ class VideoGenerator:
             return
         inp, project_id = job["input"], job["project_id"]
         t0 = time.time()
+        _stage(sb, job_id, "started", t0)
         try:
             w, h = SIZES.get(inp.get("aspect_ratio", "9:16"), SIZES["9:16"])
             common = dict(
@@ -444,12 +456,22 @@ class VideoGenerator:
                         )
                     buf = io.BytesIO()
                     image.save(buf, "PNG")
-                    edited = ImageEditor().edit.remote(buf.getvalue(), instruction)
-                    image = Image.open(io.BytesIO(edited)).convert("RGB").resize((w, h), Image.LANCZOS)
-                    frame_path = f"{job['owner_id']}/{project_id}/generated/{job_id}-frame.png"
-                    sb.storage.from_("media").upload(frame_path, edited, {"content-type": "image/png", "upsert": "true"})
+                    _stage(sb, job_id, "making the model photo", t0)
+                    try:
+                        # Bounded so the animation and voice still fit in this job's time.
+                        edited = ImageEditor().edit.spawn(buf.getvalue(), instruction).get(timeout=1200)
+                        image = Image.open(io.BytesIO(edited)).convert("RGB").resize((w, h), Image.LANCZOS)
+                        frame_path = f"{job['owner_id']}/{project_id}/generated/{job_id}-frame.png"
+                        sb.storage.from_("media").upload(frame_path, edited, {"content-type": "image/png", "upsert": "true"})
+                    except Exception as ee:  # noqa: BLE001
+                        # Fall back to the avatar's own photo (or the product photo) rather than failing.
+                        print(f"model photo failed, using the original photo: {ee!r}", flush=True)
+                        fallback = sb.storage.from_("media").download(inp["avatar_path"]) if inp.get("avatar_path") else raw
+                        image = self._fit(Image.open(io.BytesIO(fallback)), w, h)
+                _stage(sb, job_id, "animating", t0)
                 frames = self.i2v(image=image, **common).frames[0]
             else:
+                _stage(sb, job_id, "animating", t0)
                 frames = self.t2v(**common).frames[0]
 
             with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
@@ -460,9 +482,10 @@ class VideoGenerator:
             if inp.get("voice") and inp.get("line"):
                 # Give the avatar a voice and sync their lips. If anything goes wrong the
                 # silent clip is still delivered rather than failing the whole scene.
+                _stage(sb, job_id, "adding the voice", t0)
                 try:
                     # Leave time to save the clip before this container's own timeout.
-                    wait = max(60, VIDEO_TIMEOUT - (time.time() - t0) - 180)
+                    wait = max(30, VIDEO_TIMEOUT - (time.time() - t0) - 240)
                     talked = Talker().speak.spawn(data, inp["line"], inp["voice"]).get(timeout=wait)
                     data, voice_mode = talked["video"], talked["mode"]
                 except Exception as te:  # noqa: BLE001
@@ -500,7 +523,7 @@ class VideoGenerator:
 
 
 @app.cls(gpu=["L40S", "A100-80GB", "H100"], image=talk_image, volumes={MODELS_DIR: models},
-         timeout=1200, scaledown_window=60, max_containers=2)
+         timeout=2400, scaledown_window=60, max_containers=2)
 class Talker:
     @modal.enter()
     def load(self):
@@ -611,6 +634,31 @@ class Talker:
                 subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-i", wav, "-c:v", "copy",
                                 "-c:a", "aac", "-b:a", "192k", "-shortest", out], check=True)
                 return {"video": open(out, "rb").read(), "mode": "voiceover"}
+
+
+@app.function(image=talk_image, volumes={MODELS_DIR: models}, timeout=3600)
+def prefetch() -> list[str]:
+    """Download every model's weights into the shared volume (CPU only), so the first
+    real video doesn't spend its GPU time and time limit on downloads. Fast when cached."""
+    from huggingface_hub import hf_hub_download, snapshot_download
+
+    done = []
+    for repo in (LLM_ID, VIDEO_ID, EDIT_ID, "stabilityai/sd-vae-ft-mse"):
+        t = time.time()
+        snapshot_download(repo)
+        models.commit()
+        done.append(f"{repo}: {time.time() - t:.0f}s")
+    for name in ("latentsync_unet.pt", "whisper/tiny.pt"):
+        hf_hub_download("ByteDance/LatentSync-1.6", name, local_dir=f"{MODELS_DIR}/latentsync")
+    models.commit()
+    done.append("LatentSync-1.6: ok")
+    return done
+
+
+@app.local_entrypoint()
+def warm_models():
+    """`modal run worker/modal_app.py::warm_models`"""
+    print(prefetch.remote())
 
 
 VOICE_IDS = ["af_heart", "af_bella", "am_michael", "am_fenrir", "bf_emma", "bm_george"]
