@@ -128,8 +128,8 @@ async function submitToWorker(jobId: string): Promise<string | null> {
 
 /** One-step create: new project from the composer, attach the chosen product/avatar, start the AI. */
 export async function createAndGenerate(formData: FormData) {
+  // An empty idea is fine: the AI script writer then picks a strong concept for the product/avatar.
   const idea = String(formData.get("idea") ?? "").trim().slice(0, 600);
-  if (!idea) return;
   const aspect = ["9:16", "16:9", "1:1"].includes(String(formData.get("aspect_ratio"))) ? String(formData.get("aspect_ratio")) : "9:16";
   const sceneCount = Math.min(Math.max(Number(formData.get("scene_count") ?? 1), 1), 5);
   const productId = String(formData.get("product_id") ?? "") || null;
@@ -139,16 +139,17 @@ export async function createAndGenerate(formData: FormData) {
   // RLS limits these lookups to the caller's own library.
   const ids = [productId, avatarId].filter(Boolean) as string[];
   const { data: picks } = ids.length
-    ? await supabase.from("assets").select("id, storage_path").in("id", ids)
-    : { data: [] as { id: string; storage_path: string }[] };
+    ? await supabase.from("assets").select("id, storage_path, file_name").in("id", ids)
+    : { data: [] as { id: string; storage_path: string; file_name: string | null }[] };
   const productPath = picks?.find((p) => p.id === productId)?.storage_path ?? null;
   const avatarPath = picks?.find((p) => p.id === avatarId)?.storage_path ?? null;
 
-  const words = idea.replace(/[^\p{L}\p{N}\s'-]/gu, "").split(/\s+/).filter(Boolean);
+  const productName = picks?.find((p) => p.id === productId)?.file_name?.replace(/\.[a-z0-9]+$/i, "") ?? "";
+  const words = (idea || (productName ? `${productName} ad` : "AI ad")).replace(/[^\p{L}\p{N}\s'-]/gu, "").split(/\s+/).filter(Boolean);
   const title = words.slice(0, 6).join(" ") + (words.length > 6 ? "…" : "");
   const { data: project, error } = await supabase
     .from("projects")
-    .insert({ title: title || "New ad", offer_description: idea, aspect_ratio: aspect, status: "generating" })
+    .insert({ title: title || "New ad", offer_description: idea || productName || null, aspect_ratio: aspect, status: "generating" })
     .select("id")
     .single();
   if (error) throw new Error(error.message);
@@ -290,7 +291,8 @@ export async function addProductFromUrl(raw: string): Promise<{ id: string } | {
     if (bytes.byteLength > 20_000_000) return { error: "That photo is over 20 MB." };
     if (bytes.byteLength < 2_000) return { error: "That photo is too small to use." };
     const ext = type.split("/")[1]?.replace("jpeg", "jpg").replace(/[^a-z0-9]/g, "") || "jpg";
-    const title = (name ?? url.hostname).replace(/\s+/g, " ").slice(0, 80);
+    const site = url.hostname.replace(/^www\./, "").replace(/^(m\.)?media-amazon\.com$|images-amazon\.com$/, "amazon.com");
+    const title = (name ?? `Product from ${site}`).replace(/\s+/g, " ").slice(0, 80);
     const path = `${user.id}/library/${crypto.randomUUID()}-link.${ext}`;
 
     const { error: upErr } = await supabase.storage.from("media").upload(path, bytes, { contentType: type });
