@@ -171,6 +171,7 @@ export async function createAndGenerate(formData: FormData) {
       input: {
         scene_count: sceneCount,
         idea,
+        product_name: productName || null,
         product_path: productPath,
         avatar_path: avatarPath,
         model_shot: !!productPath && (formData.get("model_shot") === "on" || !!avatarPath),
