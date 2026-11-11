@@ -141,6 +141,32 @@ const FORMATS: { value: "9:16" | "16:9" | "1:1"; label: string; hint: string; sh
 ];
 const SCENES = [1, 2, 3, 4, 5].map((n) => ({ value: n, label: `${n} scene${n > 1 ? "s" : ""}`, hint: `About ${n * 5} seconds` }));
 
+/** Ready-made ad ideas, matched to what's picked (avatar + product, product only, avatar only, nothing). */
+const AUTO: Record<"both" | "product" | "avatar" | "none", string[]> = {
+  both: [
+    "The person holds the product up to the camera with a big genuine smile, then shows it off and turns slowly so we see every detail. Bright cozy home, soft window light, handheld phone-style UGC shot, warm and friendly.",
+    "The person is wearing the product and walks toward the camera with confidence, then stops, smiles and points to it. Golden-hour city street, shallow depth of field, slow tracking shot, warm cinematic film look.",
+    "Close-up unboxing moment: the person lifts the product out, reacts with excitement, then holds it next to their face and nods at the camera. Clean bright room, natural light, handheld vertical selfie-style shot.",
+    "The person shows the product in a festive living room with a glowing Christmas tree and twinkling lights, smiles and gestures toward it like a gift. Slow gentle push-in, warm cozy holiday lighting.",
+    "The person stands in a bright modern kitchen, picks up the product, looks impressed and gives a thumbs up to the camera. Steady medium shot slowly pushing in, soft morning light, clean commercial look.",
+  ],
+  product: [
+    "Slow cinematic push-in on the product on a dark marble pedestal, soft golden rim light, floating dust particles in the air, luxury commercial look, rich deep shadows.",
+    "The product slowly rotates on a clean white surface while soft light sweeps across it, highlighting textures and details, minimal premium studio commercial style.",
+    "The product sits in a festive scene with a glowing Christmas tree, gift boxes and gentle snowfall outside the window, slow orbit shot, warm cozy holiday lighting.",
+    "Dynamic product reveal: the camera glides past soft-focus foreground objects to reveal the product in sharp focus, warm sunset light streaming through a window, cinematic commercial look.",
+  ],
+  avatar: [
+    "The person looks into the camera with a warm confident smile, nods and starts talking enthusiastically like they're sharing a favorite find. Bright home, soft window light, handheld UGC phone shot.",
+    "The person walks through a bright sunny room toward the camera, waves hello and smiles, natural friendly energy, slow tracking shot, warm natural light.",
+    "The person laughs, turns to the camera and gestures excitedly as if revealing big news, cozy living room, warm lighting, handheld vertical selfie-style shot.",
+  ],
+  none: [
+    "A confident young creator in a bright apartment smiles at the camera and holds up a sleek new product, handheld phone-style UGC shot, soft natural window light.",
+    "Slow cinematic push-in on a luxury product on a dark marble pedestal, golden rim light, floating dust particles, premium commercial look.",
+  ],
+};
+
 export default function Composer({ products, avatars, userId }: { products: Item[]; avatars: Item[]; userId: string }) {
   const [idea, setIdea] = useState("");
   const [product, setProduct] = useState<string | null>(null);
@@ -149,6 +175,12 @@ export default function Composer({ products, avatars, userId }: { products: Item
   const [scenes, setScenes] = useState(1);
   const [modelShot, setModelShot] = useState(true);
   const [pending, setPending] = useState(false);
+  const [autoN, setAutoN] = useState(0);
+  const writeForMe = () => {
+    const list = AUTO[product && avatar ? "both" : product ? "product" : avatar ? "avatar" : "none"];
+    setIdea(list[autoN % list.length]);
+    setAutoN(autoN + 1);
+  };
 
   return (
     <form action={createAndGenerate} onSubmit={() => setPending(true)} className="gold-ring rounded-3xl border border-gold/30 bg-card p-4 sm:p-5">
@@ -161,10 +193,9 @@ export default function Composer({ products, avatars, userId }: { products: Item
         name="idea"
         value={idea}
         onChange={(e) => setIdea(e.target.value)}
-        required
         rows={3}
         maxLength={600}
-        placeholder={'Describe your ad, e.g. "A confident young man wearing my shirt walks through a snowy downtown street at night, Christmas lights glowing…"'}
+        placeholder={'Describe your ad, press "Write it for me", or leave it empty and the AI picks the idea.'}
         className="w-full resize-none bg-transparent text-base leading-relaxed text-foreground outline-none placeholder:text-muted/70"
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.currentTarget.form as HTMLFormElement).requestSubmit(); }}
       />
@@ -178,13 +209,16 @@ export default function Composer({ products, avatars, userId }: { products: Item
             <Sparkle className="h-4 w-4" /> On a model
           </button>
         )}
-        <button disabled={pending || !idea.trim()} title="Generate (Ctrl+Enter)"
+        <button disabled={pending} title="Generate (Ctrl+Enter)"
           className="gold-bg ml-auto flex h-11 w-11 items-center justify-center rounded-full text-black transition hover:brightness-110 disabled:opacity-40">
           {pending ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/30 border-t-black" /> : <Arrow />}
         </button>
       </div>
       <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
-        <span className="eyebrow mr-1 self-center">Try</span>
+        <button type="button" onClick={writeForMe} className="chip chip-on">
+          <Sparkle className="h-4 w-4" /> {idea && autoN ? "Another idea" : "Write it for me"}
+        </button>
+        <span className="eyebrow mx-1 self-center">or try</span>
         {STARTERS.map((s) => (
           <button type="button" key={s.label} className="chip" onClick={() => setIdea(s.text)}>{s.label}</button>
         ))}
