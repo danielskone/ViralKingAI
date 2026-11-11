@@ -8,6 +8,7 @@ import ProductLink from "@/components/ProductLink";
 import { deleteLibraryItem, toggleLike } from "@/app/actions";
 import { Heart } from "@/components/icons";
 import DeleteButton from "@/components/DeleteButton";
+import RenameName from "@/components/RenameName";
 
 const TABS = [
   { id: "uploads", label: "Uploads" },
@@ -93,7 +94,9 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
               </div>
               {i.liked && <Heart className="absolute left-2 top-2 h-4 w-4 text-gold sm:group-hover:opacity-0" filled />}
               <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-                <span className="truncate text-muted" title={i.file_name ?? ""}>{(i.file_name ?? "").replace(/\.[a-z0-9]+$/i, "")}</span>
+                {i.kind === "product" || i.kind === "avatar"
+                  ? <RenameName id={i.id} name={i.file_name ?? ""} />
+                  : <span className="truncate text-muted" title={i.file_name ?? ""}>{(i.file_name ?? "").replace(/\.[a-z0-9]+$/i, "")}</span>}
                 {i.project_id && <Link href={`/projects/${i.project_id}`} className="shrink-0 text-gold hover:underline">Project</Link>}
               </div>
             </div>
