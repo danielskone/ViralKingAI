@@ -213,7 +213,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
   const [product, setProduct] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
   const [aspect, setAspect] = useState<"9:16" | "16:9" | "1:1">("9:16");
-  const [scenes, setScenes] = useState(1);
+  const [scenes, setScenes] = useState(3);
   const [modelShot, setModelShot] = useState(true);
   const [voice, setVoice] = useState("af_heart");
   const [pending, setPending] = useState(false);

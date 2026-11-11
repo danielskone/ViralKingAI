@@ -140,7 +140,7 @@ export async function createAndGenerate(formData: FormData) {
   // An empty idea is fine: the AI script writer then picks a strong concept for the product/avatar.
   const idea = String(formData.get("idea") ?? "").trim().slice(0, 600);
   const aspect = ["9:16", "16:9", "1:1"].includes(String(formData.get("aspect_ratio"))) ? String(formData.get("aspect_ratio")) : "9:16";
-  const sceneCount = Math.min(Math.max(Number(formData.get("scene_count") ?? 1), 1), 5);
+  const sceneCount = Math.min(Math.max(Number(formData.get("scene_count") ?? 3), 1), 5);
   const productId = String(formData.get("product_id") ?? "") || null;
   const avatarId = String(formData.get("avatar_id") ?? "") || null;
   const supabase = await createClient();

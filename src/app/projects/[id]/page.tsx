@@ -46,7 +46,7 @@ export default async function ProjectPage({
   const lastScript = run.find((j) => j.job_type === "script");
   const lastIn = (lastScript?.input ?? {}) as ScriptIn;
   const lastIdea = lastIn.idea ?? project.offer_description ?? "";
-  const lastCount = String(lastIn.scene_count ?? 1);
+  const lastCount = String(lastIn.scene_count ?? 3);
   const lastModelShot = lastIn.model_shot ?? true;
   const lastVoice = lastIn.voice ?? "";
   const script = (lastScript?.status === "succeeded" ? lastScript.output : undefined) as
