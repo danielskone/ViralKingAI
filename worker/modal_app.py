@@ -586,6 +586,49 @@ class Talker:
                 return {"video": open(out, "rb").read(), "mode": "voiceover"}
 
 
+VOICE_IDS = ["af_heart", "af_bella", "am_michael", "am_fenrir", "bf_emma", "bm_george"]
+SAMPLE_LINE = "Hi! This is the voice I'd use for your video. Let me show you why you'll love this."
+
+
+@app.function(image=talk_image, volumes={MODELS_DIR: models}, secrets=secrets, timeout=900)
+def voice_samples() -> list[str]:
+    """Render a short preview of each voice (CPU) into the public voice-samples bucket."""
+    import subprocess, tempfile, urllib.request
+    import numpy as np, soundfile as sf
+    from kokoro import KPipeline
+
+    pipes = {}
+    base, key = os.environ["SUPABASE_URL"].rstrip("/"), os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    done = []
+    for v in VOICE_IDS:
+        try:  # already rendered? (runs after every deploy, so skip the ones that exist)
+            urllib.request.urlopen(f"{base}/storage/v1/object/public/voice-samples/{v}.mp3", timeout=20).read(1)
+            done.append(f"{v}: exists")
+            continue
+        except Exception:
+            pass
+        if v[0] not in pipes:
+            pipes[v[0]] = KPipeline(lang_code=v[0])
+        audio = np.concatenate([np.asarray(a, dtype=np.float32) for _, _, a in pipes[v[0]](SAMPLE_LINE, voice=v)])
+        with tempfile.TemporaryDirectory() as d:
+            sf.write(f"{d}/v.wav", audio, 24000)
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", f"{d}/v.wav", "-b:a", "64k", f"{d}/v.mp3"], check=True)
+            data = open(f"{d}/v.mp3", "rb").read()
+        req = urllib.request.Request(f"{base}/storage/v1/object/voice-samples/{v}.mp3", data=data, method="POST",
+                                     headers={"Authorization": f"Bearer {key}", "apikey": key,
+                                              "Content-Type": "audio/mpeg", "x-upsert": "true"})
+        urllib.request.urlopen(req, timeout=60).read()
+        done.append(f"{v}: {len(audio) / 24000:.1f}s")
+    models.commit()
+    return done
+
+
+@app.local_entrypoint()
+def make_voice_samples():
+    """`modal run worker/modal_app.py::make_voice_samples`"""
+    print(voice_samples.remote())
+
+
 @app.local_entrypoint()
 def talk_smoke():
     """Self-test: voice + lip-sync on LatentSync's own demo clip. `modal run worker/modal_app.py::talk_smoke`"""

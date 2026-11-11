@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createAndGenerate } from "@/app/actions";
 import { uploadToLibrary } from "@/components/LibraryUpload";
 import ProductLink from "@/components/ProductLink";
-import { Arrow, Box, Check, ChevronDown, Layers, Mic, Plus, Ratio, Sparkle, User } from "@/components/icons";
+import { Arrow, Box, Check, ChevronDown, Layers, Mic, Play, Plus, Ratio, Sparkle, User } from "@/components/icons";
 
 type Item = { id: string; url?: string; thumb?: string; file_name: string | null };
 
@@ -87,10 +87,24 @@ function Picker({
 
 /** A chip that opens a small menu of choices (used for Format and Scenes). */
 function Dropdown<T extends string | number>({ icon, label, options, value, onChange }: {
-  icon: React.ReactNode; label: string; options: { value: T; label: string; hint?: string; shape?: React.ReactNode }[]; value: T; onChange: (v: T) => void;
+  icon: React.ReactNode; label: string; options: { value: T; label: string; hint?: string; shape?: React.ReactNode; preview?: string }[]; value: T; onChange: (v: T) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [playing, setPlaying] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const audio = useRef<HTMLAudioElement | null>(null);
+
+  const stop = () => { audio.current?.pause(); setPlaying(null); };
+  const listen = (src: string) => {
+    if (playing === src) return stop();
+    audio.current?.pause();
+    const a = new Audio(src);
+    audio.current = a;
+    a.onended = a.onerror = () => setPlaying((p) => (p === src ? null : p));
+    setPlaying(src);
+    a.play().catch(() => setPlaying(null));
+  };
+  useEffect(() => { if (!open) stop(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   const current = options.find((o) => o.value === value);
 
   useEffect(() => {
@@ -116,16 +130,25 @@ function Dropdown<T extends string | number>({ icon, label, options, value, onCh
         <div role="listbox" className="absolute left-0 top-full z-40 mt-2 max-h-[60vh] w-60 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border border-gold/30 bg-panel p-1.5 shadow-2xl shadow-black/60">
           <p className="eyebrow px-3 pb-1 pt-1.5">{label}</p>
           {options.map((o) => (
-            <button type="button" role="option" aria-selected={o.value === value} key={String(o.value)}
-              onClick={() => { onChange(o.value); setOpen(false); }}
-              className={"flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition hover:bg-card " + (o.value === value ? "bg-gold/10 text-gold" : "text-foreground")}>
-              {o.shape && <span className="flex h-7 w-7 shrink-0 items-center justify-center">{o.shape}</span>}
-              <span className="min-w-0 flex-1 leading-tight">
-                {o.label}
-                {o.hint && <span className="mt-0.5 block truncate text-xs text-muted">{o.hint}</span>}
-              </span>
-              {o.value === value && <Check className="h-4 w-4" />}
-            </button>
+            <div key={String(o.value)} className={"flex items-center rounded-xl transition hover:bg-card " + (o.value === value ? "bg-gold/10 text-gold" : "text-foreground")}>
+              {o.preview && (
+                <button type="button" onClick={() => listen(o.preview!)} aria-label={(playing === o.preview ? "Stop " : "Hear ") + o.label}
+                  title={playing === o.preview ? "Stop" : "Hear this voice"}
+                  className={"ml-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition " + (playing === o.preview ? "gold-bg border-transparent text-black" : "border-gold/40 text-gold hover:bg-gold/10")}>
+                  {playing === o.preview ? <span className="h-2.5 w-2.5 rounded-[2px] bg-black" /> : <Play className="ml-0.5 h-3.5 w-3.5" />}
+                </button>
+              )}
+              <button type="button" role="option" aria-selected={o.value === value}
+                onClick={() => { onChange(o.value); setOpen(false); }}
+                className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left text-sm">
+                {o.shape && <span className="flex h-7 w-7 shrink-0 items-center justify-center">{o.shape}</span>}
+                <span className="min-w-0 flex-1 leading-tight">
+                  {o.label}
+                  {o.hint && <span className="mt-0.5 block truncate text-xs text-muted">{o.hint}</span>}
+                </span>
+                {o.value === value && <Check className="h-4 w-4" />}
+              </button>
+            </div>
           ))}
         </div>
       )}
@@ -139,14 +162,15 @@ const FORMATS: { value: "9:16" | "16:9" | "1:1"; label: string; hint: string; sh
   { value: "16:9", label: "Wide 16:9", hint: "YouTube, website", shape: <Shape w={24} h={14} /> },
   { value: "1:1", label: "Square 1:1", hint: "Instagram & Facebook feed", shape: <Shape w={18} h={18} /> },
 ];
-const VOICE_OPTS: { value: string; label: string; hint: string }[] = [
+const SAMPLES = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/voice-samples`;
+const VOICE_OPTS: { value: string; label: string; hint: string; preview?: string }[] = [
   { value: "", label: "Silent", hint: "No voice, just video" },
-  { value: "af_heart", label: "Woman · warm", hint: "American, friendly" },
-  { value: "af_bella", label: "Woman · bright", hint: "American, upbeat" },
-  { value: "am_michael", label: "Man · natural", hint: "American, relaxed" },
-  { value: "am_fenrir", label: "Man · deep", hint: "American, bold" },
-  { value: "bf_emma", label: "Woman · British", hint: "British, polished" },
-  { value: "bm_george", label: "Man · British", hint: "British, classic" },
+  { value: "af_heart", label: "Woman · warm", hint: "American, friendly", preview: `${SAMPLES}/af_heart.mp3` },
+  { value: "af_bella", label: "Woman · bright", hint: "American, upbeat", preview: `${SAMPLES}/af_bella.mp3` },
+  { value: "am_michael", label: "Man · natural", hint: "American, relaxed", preview: `${SAMPLES}/am_michael.mp3` },
+  { value: "am_fenrir", label: "Man · deep", hint: "American, bold", preview: `${SAMPLES}/am_fenrir.mp3` },
+  { value: "bf_emma", label: "Woman · British", hint: "British, polished", preview: `${SAMPLES}/bf_emma.mp3` },
+  { value: "bm_george", label: "Man · British", hint: "British, classic", preview: `${SAMPLES}/bm_george.mp3` },
 ];
 const SCENES = [1, 2, 3, 4, 5].map((n) => ({ value: n, label: `${n} scene${n > 1 ? "s" : ""}`, hint: `About ${n * 5} seconds` }));
 
