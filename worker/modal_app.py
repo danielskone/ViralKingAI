@@ -154,6 +154,29 @@ def _settle_project(sb, project_id: str):
     sb.table("projects").update({"status": "ready" if ok else "failed"}).eq("id", project_id).execute()
 
 
+def _exact_lines(idea: str, n: int) -> list[str] | None:
+    """If the customer put the spoken words in quotes, split exactly those words across the
+    n scenes (whole sentences, balanced by length) so the avatar says them word for word."""
+    quotes = re.findall(r'[\u201c"]([^\u201d"]{12,})[\u201d"]', idea or "")
+    if not quotes or n < 1:
+        return None
+    text = " ".join(q.strip() for q in quotes)
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", text) if x.strip()]
+    if not sentences:
+        return None
+    total = sum(len(x.split()) for x in sentences)
+    groups: list[list[str]] = [[] for _ in range(n)]
+    done, g = 0, 0
+    for k, sent in enumerate(sentences):
+        # Move to the next scene once this one has its share, keeping a sentence for each later scene.
+        while g < n - 1 and done >= total * (g + 1) / n and len(sentences) - k >= n - g - 1:
+            g += 1
+        groups[g].append(sent)
+        done += len(sent.split())
+    lines = [" ".join(x) for x in groups]
+    return lines if all(lines) else None
+
+
 def _append_card(video: bytes, card_png: bytes, w: int, h: int, seconds: float = 2.0) -> bytes:
     """Add a still card to the end of a clip, keeping the clip's sound if it has any."""
     import subprocess
@@ -385,6 +408,11 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                                  talk=bool(voice), product_name=(inp.get("product_name") or "").strip()[:120],
                                  product_desc=product_desc)
             script["product"] = product_desc
+            exact = _exact_lines(idea, len(script["scenes"])) if voice else None
+            if exact:
+                # The customer wrote the exact words to say: use them, not the model's lines.
+                for scene, line in zip(script["scenes"], exact):
+                    scene["line"] = line
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.
