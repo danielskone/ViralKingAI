@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createAndGenerate } from "@/app/actions";
 import { uploadToLibrary } from "@/components/LibraryUpload";
+import ProductLink from "@/components/ProductLink";
 import { Arrow, Box, Check, ChevronDown, Layers, Plus, Ratio, Sparkle, User } from "@/components/icons";
 
 type Item = { id: string; url?: string; thumb?: string; file_name: string | null };
@@ -43,11 +44,16 @@ function Picker({
         {chosen ? (chosen.file_name ?? label).replace(/\.[a-z0-9]+$/i, "").slice(0, 18) : label}
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 z-20 mb-2 w-[min(22rem,80vw)] rounded-2xl border border-border bg-panel p-3 shadow-2xl">
+        <div className="absolute left-0 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-gold/30 bg-panel p-3 shadow-2xl shadow-black/60">
           <div className="mb-2 flex items-center justify-between">
             <p className="eyebrow">Choose {label.toLowerCase()}</p>
             {value && <button type="button" className="text-xs text-muted hover:text-foreground" onClick={() => { onChange(null); setOpen(false); }}>Clear</button>}
           </div>
+          {kind === "product" && (
+            <div className="mb-3">
+              <ProductLink compact onAdded={(id) => { onChange(id); setOpen(false); }} />
+            </div>
+          )}
           <div className="grid max-h-64 grid-cols-3 gap-2 overflow-y-auto">
             <label className="flex aspect-square cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border text-xs text-muted hover:border-gold/60 hover:text-foreground">
               <Plus className="h-4 w-4" />{busy ? "Uploading…" : "Upload"}
