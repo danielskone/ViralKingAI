@@ -81,11 +81,11 @@ talk_image = (
         "python_speech_features==0.6", "librosa==0.10.1", "scenedetect==0.6.1", "ffmpeg-python==0.2.0",
         "imageio==2.31.1", "imageio-ffmpeg==0.5.1", "face-alignment==1.4.1", "huggingface-hub==0.30.2",
         "numpy==1.26.4", "kornia==0.8.0", "insightface==0.7.3", "onnxruntime-gpu==1.21.0",
-        "DeepCache==0.1.1", "soundfile", "kokoro==0.9.4", "hf_transfer",
+        "DeepCache==0.1.1", "soundfile", "kokoro==0.9.4", "hf_transfer", "matplotlib", "tqdm",
         "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     )
     .run_commands(f"git clone https://github.com/bytedance/LatentSync {LS_DIR} && cd {LS_DIR} && git checkout {LS_COMMIT}")
-    .env({"HF_HOME": MODELS_DIR, "HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    .env({"HF_HOME": MODELS_DIR, "HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONPATH": LS_DIR})
 )
 TALK_SECONDS = NUM_FRAMES / FPS  # one spoken line per ~5 s clip
 
@@ -505,7 +505,12 @@ class Talker:
         import torch
         from huggingface_hub import hf_hub_download
 
-        # LatentSync loads its files from paths relative to its repo folder.
+        # LatentSync isn't pip-installable: import it from its repo folder, which is also where
+        # it loads its config files from (relative paths).
+        import sys
+
+        if LS_DIR not in sys.path:
+            sys.path.insert(0, LS_DIR)
         os.chdir(LS_DIR)
         ckpt = f"{MODELS_DIR}/latentsync"
         for name in ("latentsync_unet.pt", "whisper/tiny.pt"):
