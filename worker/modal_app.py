@@ -67,6 +67,28 @@ gpu_image = (
     .env({"HF_HOME": MODELS_DIR, "HF_HUB_ENABLE_HF_TRANSFER": "1",
           "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
 )
+# Talking avatars: Kokoro-82M text-to-speech (Apache 2.0) + LatentSync 1.6 lip-sync (Apache 2.0).
+# LatentSync pins its own older torch/diffusers, so it lives in its own image.
+LS_DIR = "/opt/LatentSync"
+LS_COMMIT = "a229c3948406bc2cf6eaf4873e662e70c6a04746"
+talk_image = (
+    modal.Image.debian_slim(python_version="3.10")
+    .apt_install("ffmpeg", "git", "libgl1", "libglib2.0-0", "espeak-ng", "build-essential")
+    .pip_install("torch==2.5.1", "torchvision==0.20.1", index_url="https://download.pytorch.org/whl/cu121")
+    .pip_install(
+        "diffusers==0.32.2", "transformers==4.48.0", "decord==0.6.0", "accelerate==0.26.1",
+        "einops==0.7.0", "omegaconf==2.3.0", "opencv-python==4.9.0.80", "mediapipe==0.10.11",
+        "python_speech_features==0.6", "librosa==0.10.1", "scenedetect==0.6.1", "ffmpeg-python==0.2.0",
+        "imageio==2.31.1", "imageio-ffmpeg==0.5.1", "face-alignment==1.4.1", "huggingface-hub==0.30.2",
+        "numpy==1.26.4", "kornia==0.8.0", "insightface==0.7.3", "onnxruntime-gpu==1.21.0",
+        "DeepCache==0.1.1", "soundfile", "kokoro==0.9.4", "hf_transfer",
+        "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+    )
+    .run_commands(f"git clone https://github.com/bytedance/LatentSync {LS_DIR} && cd {LS_DIR} && git checkout {LS_COMMIT}")
+    .env({"HF_HOME": MODELS_DIR, "HF_HUB_ENABLE_HF_TRANSFER": "1"})
+)
+TALK_SECONDS = NUM_FRAMES / FPS  # one spoken line per ~5 s clip
+
 web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "fastapi[standard]", "supabase==2.22.4"
 )
@@ -135,7 +157,7 @@ class ScriptWriter:
         )
         models.commit()
 
-    def _write(self, title: str, offer: str, idea: str, subject: str, n: int) -> dict:
+    def _write(self, title: str, offer: str, idea: str, subject: str, n: int, talk: bool = False) -> dict:
         system = (
             "You are an award-winning commercial director writing shot prompts for the Wan 2.2 "
             "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
@@ -177,16 +199,32 @@ class ScriptWriter:
             )
         else:
             photo_rule = "No photo was uploaded; describe every scene fully."
+        if talk and subject != "product":
+            talk_rule = (
+                "The person TALKS to the camera in every scene, like a real UGC creator. In each prompt, "
+                "frame them in a medium close-up facing the camera, speaking with natural expressions and "
+                "gentle head movement, mouth clearly visible, nothing covering the face. For each scene also "
+                "write \"line\": exactly what they say out loud, 8-12 words, first person, casual and "
+                "convincing; scene 1 is a hook, the last scene ends with the call to action."
+            )
+        elif talk:
+            talk_rule = (
+                "A narrator speaks over the video. For each scene also write \"line\": the voice-over for "
+                "that shot, 8-12 words, warm and persuasive; scene 1 is a hook, the last scene a call to action."
+            )
+        else:
+            talk_rule = ""
         user = f"""Project: "{title}". Business / offer: "{offer or title}".
 Customer's idea for the video: "{idea or 'not given; choose a strong, scroll-stopping concept for this offer'}".
 {photo_rule}
+{talk_rule}
 
 Write {n} scene(s) for a short social media ad that follows the customer's idea closely.
 For each scene give:
 - "prompt": 70-110 words, in the style of this example: "{example}"
 - "caption": on-screen text for that scene, max 8 words.
 Also give "hook" (max 8 words) and "cta" (max 6 words).
-JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "first_frame": str (scene 1 only, when asked)}}]}}"""
+JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "line": str (when asked), "first_frame": str (scene 1 only, when asked)}}]}}"""
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         ids = self.tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt").to("cuda")
         out = self.model.generate(ids, max_new_tokens=1600, temperature=0.8, top_p=0.9, do_sample=True)
@@ -227,7 +265,9 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                 first_image = images[0]["storage_path"] if images else None
                 model_shot = bool(inp.get("model_shot")) and bool(first_image)
                 subject = ("product_model" if model_shot else "product") if first_image else "none"
-            script = self._write(project["title"], project.get("offer_description") or "", idea, subject, n)
+            voice = inp.get("voice") or None
+            script = self._write(project["title"], project.get("offer_description") or "", idea, subject, n,
+                                 talk=bool(voice))
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.
@@ -246,6 +286,8 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                         "image_path": first_image if i == 0 else None,
                         "avatar_path": avatar if (i == 0 and product and model_shot) else None,
                         "model_shot": (scene.get("first_frame") or None) if (i == 0 and model_shot) else None,
+                        "line": (scene.get("line") or "").strip() if voice else "",
+                        "voice": voice,
                     },
                 }
                 res = sb.table("generation_jobs").upsert(
@@ -394,6 +436,17 @@ class VideoGenerator:
                 export_to_video(frames, f.name, fps=FPS)
                 data = open(f.name, "rb").read()
 
+            voice_mode = None
+            if inp.get("voice") and inp.get("line"):
+                # Give the avatar a voice and sync their lips. If anything goes wrong the
+                # silent clip is still delivered rather than failing the whole scene.
+                try:
+                    talked = Talker().speak.remote(data, inp["line"], inp["voice"])
+                    data, voice_mode = talked["video"], talked["mode"]
+                except Exception as te:  # noqa: BLE001
+                    print(f"voice step failed, keeping silent clip: {te!r}", flush=True)
+                    voice_mode = "failed"
+
             path = f"{job['owner_id']}/{project_id}/generated/{job_id}.mp4"
             sb.storage.from_("media").upload(path, data, {"content-type": "video/mp4", "upsert": "true"})
             asset = sb.table("assets").insert({
@@ -405,7 +458,7 @@ class VideoGenerator:
                 "mime_type": "video/mp4",
                 "size_bytes": len(data),
             }).execute().data[0]
-            _finish(sb, job_id, output={"asset_id": asset["id"], "storage_path": path},
+            _finish(sb, job_id, output={"asset_id": asset["id"], "storage_path": path, "voice": voice_mode},
                     gpu_seconds=round(time.time() - t0, 1))
         except Exception as e:  # noqa: BLE001
             _finish(sb, job_id, error=e, gpu_seconds=round(time.time() - t0, 1))
@@ -419,6 +472,124 @@ class VideoGenerator:
 
             gc.collect()
             torch.cuda.empty_cache()
+
+
+# --------------------------------------------------------------------------- talking avatar
+
+
+@app.cls(gpu=["L40S", "A100-80GB", "H100"], image=talk_image, volumes={MODELS_DIR: models},
+         timeout=1200, scaledown_window=60, max_containers=2)
+class Talker:
+    @modal.enter()
+    def load(self):
+        import torch
+        from huggingface_hub import hf_hub_download
+
+        # LatentSync loads its files from paths relative to its repo folder.
+        os.chdir(LS_DIR)
+        ckpt = f"{MODELS_DIR}/latentsync"
+        for name in ("latentsync_unet.pt", "whisper/tiny.pt"):
+            hf_hub_download("ByteDance/LatentSync-1.6", name, local_dir=ckpt)
+        os.makedirs(f"{ckpt}/auxiliary", exist_ok=True)  # insightface face models land here
+        if not os.path.islink(f"{LS_DIR}/checkpoints"):
+            os.symlink(ckpt, f"{LS_DIR}/checkpoints")
+
+        from diffusers import AutoencoderKL, DDIMScheduler
+        from kokoro import KPipeline
+        from omegaconf import OmegaConf
+
+        from latentsync.models.unet import UNet3DConditionModel
+        from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
+        from latentsync.whisper.audio2feature import Audio2Feature
+
+        self.config = OmegaConf.load("configs/unet/stage2_512.yaml")
+        self.dtype = torch.float16
+        audio_encoder = Audio2Feature(
+            model_path="checkpoints/whisper/tiny.pt", device="cuda",
+            num_frames=self.config.data.num_frames, audio_feat_length=self.config.data.audio_feat_length,
+        )
+        vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=self.dtype)
+        vae.config.scaling_factor = 0.18215
+        vae.config.shift_factor = 0
+        unet, _ = UNet3DConditionModel.from_pretrained(
+            OmegaConf.to_container(self.config.model), "checkpoints/latentsync_unet.pt", device="cpu"
+        )
+        self.lipsync = LipsyncPipeline(
+            vae=vae, audio_encoder=audio_encoder, unet=unet.to(dtype=self.dtype),
+            scheduler=DDIMScheduler.from_pretrained("configs"),
+        ).to("cuda")
+        self.tts = {"a": KPipeline(lang_code="a"), "b": KPipeline(lang_code="b")}
+        models.commit()
+
+    def _say(self, line: str, voice: str):
+        """Speak the line (24 kHz mono). Speed up a little if it would overrun the clip."""
+        import numpy as np
+
+        pipe = self.tts.get(voice[0], self.tts["a"])
+
+        def synth(speed):
+            parts = [np.asarray(a, dtype=np.float32) for _, _, a in pipe(line, voice=voice, speed=speed)]
+            return np.concatenate(parts) if parts else np.zeros(1, np.float32)
+
+        audio = synth(1.0)
+        limit = TALK_SECONDS - 0.4
+        if len(audio) / 24000 > limit:
+            audio = synth(min(1.35, len(audio) / 24000 / limit))
+        return audio
+
+    @modal.method()
+    def selftest(self) -> dict:
+        t0 = time.time()
+        clip = open(f"{LS_DIR}/assets/demo1_video.mp4", "rb").read()
+        res = self.speak.local(clip, "Hey! I found the perfect gift, and you need one too.", "af_heart")
+        return {"mode": res["mode"], "bytes": len(res["video"]), "seconds": round(time.time() - t0, 1)}
+
+    @modal.method()
+    def speak(self, video_mp4: bytes, line: str, voice: str) -> dict:
+        import subprocess
+        import tempfile
+
+        import numpy as np
+        import soundfile as sf
+
+        os.chdir(LS_DIR)
+        audio = self._say(line, voice)
+        # Start speaking a beat in, and pad with silence to the full clip length.
+        lead = np.zeros(int(0.25 * 24000), np.float32)
+        audio = np.concatenate([lead, audio])
+        total = int(TALK_SECONDS * 24000)
+        audio = np.pad(audio, (0, max(0, total - len(audio))))[:total]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src, wav = f"{tmp}/in.mp4", f"{tmp}/voice.wav"
+            src25, out = f"{tmp}/in25.mp4", f"{tmp}/out.mp4"
+            open(src, "wb").write(video_mp4)
+            sf.write(wav, audio, 24000)
+            # LatentSync works at 25 fps.
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-r", "25", "-c:v", "libx264",
+                            "-crf", "16", "-pix_fmt", "yuv420p", src25], check=True)
+            try:
+                self.lipsync(
+                    video_path=src25, audio_path=wav, video_out_path=out,
+                    num_frames=self.config.data.num_frames, num_inference_steps=20, guidance_scale=1.5,
+                    weight_dtype=self.dtype, width=self.config.data.resolution,
+                    height=self.config.data.resolution, mask_image_path=self.config.data.mask_image_path,
+                    temp_dir=f"{tmp}/ls",
+                )
+                return {"video": open(out, "rb").read(), "mode": "lipsync"}
+            except RuntimeError as e:
+                if "Face not detected" not in str(e):
+                    raise
+                # No face on screen (e.g. a product shot): use the line as a voice-over.
+                subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", src, "-i", wav, "-c:v", "copy",
+                                "-c:a", "aac", "-b:a", "192k", "-shortest", out], check=True)
+                return {"video": open(out, "rb").read(), "mode": "voiceover"}
+
+
+@app.local_entrypoint()
+def talk_smoke():
+    """Self-test: voice + lip-sync on LatentSync's own demo clip. `modal run worker/modal_app.py::talk_smoke`"""
+    print(Talker().selftest.remote())
 
 
 # --------------------------------------------------------------------------- web entry point

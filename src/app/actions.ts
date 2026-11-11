@@ -76,7 +76,8 @@ export async function startGeneration(formData: FormData) {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  const prevIn = (prev?.input ?? {}) as { product_path?: string | null; avatar_path?: string | null };
+  const prevIn = (prev?.input ?? {}) as { product_path?: string | null; avatar_path?: string | null; voice?: string | null };
+  const voice = formData.has("voice") ? voiceFrom(formData) : (prevIn.voice ?? null);
 
   const { data: job, error } = await supabase
     .from("generation_jobs")
@@ -89,6 +90,7 @@ export async function startGeneration(formData: FormData) {
         product_path: prevIn.product_path ?? null,
         avatar_path: prevIn.avatar_path ?? null,
         model_shot: formData.get("model_shot") === "on",
+        voice,
       },
     })
     .select("id")
@@ -107,6 +109,13 @@ export async function startGeneration(formData: FormData) {
     redirect(`/projects/${projectId}?error=${encodeURIComponent(failure)}`);
   }
   revalidatePath(`/projects/${projectId}`);
+}
+
+const VOICES = ["af_heart", "af_bella", "am_michael", "am_fenrir", "bf_emma", "bm_george"];
+/** Talking avatar settings from the form: voice id, or null when the avatar stays silent. */
+function voiceFrom(formData: FormData): string | null {
+  const v = String(formData.get("voice") ?? "");
+  return VOICES.includes(v) ? v : null;
 }
 
 async function submitToWorker(jobId: string): Promise<string | null> {
@@ -165,6 +174,7 @@ export async function createAndGenerate(formData: FormData) {
         product_path: productPath,
         avatar_path: avatarPath,
         model_shot: !!productPath && (formData.get("model_shot") === "on" || !!avatarPath),
+        voice: voiceFrom(formData),
       },
     })
     .select("id")
