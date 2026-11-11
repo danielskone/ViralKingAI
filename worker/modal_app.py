@@ -245,12 +245,14 @@ class ScriptWriter:
                 "in the setting of the idea, described like a fashion photo (pose, setting, light, "
                 "framing). Scene 1's \"prompt\" then describes that same person and setting and the "
                 "motion that follows."
-            )
+            ) + (" Scenes after scene 1 start from the plain avatar photo, so their prompts describe that "
+                 "person talking to the camera and do not show the product." if subject == "product_avatar" else "")
         elif subject == "avatar":
             photo_rule = (
                 "Scene 1 starts from the customer's photo of a person (their avatar). Its prompt must "
                 "describe that person performing the idea (action, expression, camera move, light); "
-                "keep their look unchanged."
+                "keep their look unchanged. Every later scene starts from the same photo, so describe the "
+                "same person in each one."
             )
         elif subject == "product":
             photo_rule = (
@@ -263,27 +265,40 @@ class ScriptWriter:
         sells = subject != "avatar" or bool(product_name)
         thing = f'the product ("{product_name}")' if product_name else "the product"
         cta_rule = (
-            f"The LAST scene's line must end with a clear call to action that sells {thing}: say the "
-            "product by name (or \"this\" if no real name is given) and tell viewers what to do now, e.g. "
-            "\"Tap the link and grab yours today!\" or \"Get yours before they sell out!\". "
+            f"The LAST scene's line is the call to action and must sell {thing}: name the product (or say "
+            "\"this\" if no real name is given), give one reason to act now (a deal, limited stock, a deadline "
+            "like Christmas, or how good it feels), and say exactly what to do, e.g. \"Honestly, grab these "
+            "before Christmas, tap the link!\" or \"Trust me, get yours today, link's right below!\". "
             "With only 1 scene, that one line is a quick hook plus the call to action."
             if sells else
             "The LAST scene's line ends with a clear call to action (follow, comment, or tap the link)."
         )
+        human_rule = (
+            "Lines must sound like a real person talking to a friend, not an announcer or an ad: first "
+            "person, contractions (I'm, you're, it's), short natural phrases, a little emotion or surprise "
+            "(\"okay, I'm obsessed\", \"no joke\", \"look at this\"), one concrete detail they can see or "
+            "feel. No buzzwords like \"elevate\", \"game-changer\", \"must-have\" or \"introducing\". Scene 1's "
+            "line is a scroll-stopping hook in the first 3 words (a question, a surprise, or a bold claim). "
+            "The lines flow together as one short story: hook, why they love it, call to action."
+        )
         if talk and subject != "product":
+            same_person = (
+                " Every scene starts from the same photo of this person, so describe the SAME person "
+                "(same face, hair and clothes) in every prompt; only the expression, gestures and camera "
+                "move change." if subject in ("avatar", "product_avatar") else "")
             talk_rule = (
-                "The person TALKS to the camera in every scene, like a real UGC creator. In each prompt, "
-                "frame them in a medium close-up facing the camera, speaking with natural expressions and "
-                "gentle head movement, mouth clearly visible, nothing covering the face. For each scene also "
-                "write \"line\": exactly what they say out loud, 8-12 words, first person, casual and "
-                "convincing." + (" Every line is about the product: what it is, a benefit or detail they love, "
-                "and why the viewer needs it, while they hold, wear or point to it on camera."
-                if subject in ("product_model", "product_avatar") else "") + " Scene 1 opens with a hook. " + cta_rule
+                "The person TALKS to the camera in every scene, like a real UGC creator filming on their "
+                "phone. In each prompt, frame them in a medium close-up facing the camera, speaking with "
+                "natural, lively expressions (smiling, raised eyebrows, a nod, hand gestures), gentle head "
+                "movement, mouth clearly visible, nothing covering the face, soft natural light." + same_person +
+                " For each scene also write \"line\": exactly what they say out loud, 8-12 words. "
+                + human_rule + (" Every line is about the product: what it is, a detail they love, and why the "
+                "viewer needs it." if subject in ("product_model", "product_avatar") else "") + " " + cta_rule
             )
         elif talk:
             talk_rule = (
                 "A narrator speaks over the video. For each scene also write \"line\": the voice-over for "
-                "that shot, 8-12 words, warm and persuasive. Scene 1 opens with a hook. " + cta_rule
+                "that shot, 8-12 words, warm and persuasive. " + human_rule + " " + cta_rule
             )
         else:
             talk_rule = ""
@@ -307,8 +322,8 @@ action lands, and its caption is the call to action.
 For each scene give:
 - "prompt": 70-110 words, in the style of this example: "{example}"
 - "caption": on-screen text for that scene, max 8 words.
-Also give "hook" (max 8 words) and "cta" (max 6 words): a call to action that names the product
-when a real name is known, e.g. "Shop the {{product}} now" or "Tap the link to get yours".
+Also give "hook" (max 8 words) and "cta" (max 6 words): an urgent call to action that names the product
+when a real name is known, e.g. "Get yours before they're gone" or "Tap the link, grab yours".
 JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "line": str (when asked), "first_frame": str (scene 1 only, when asked)}}]}}"""
         text = self._chat(system, user)
         match = re.search(r"\{.*\}", text, re.S)
@@ -376,7 +391,9 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                         "prompt": scene["prompt"],
                         "caption": scene.get("caption", ""),
                         "aspect_ratio": project["aspect_ratio"],
-                        "image_path": first_image if i == 0 else None,
+                        # Scenes after the first start from the avatar photo too, so the same
+                        # person stays on screen (and lip sync finds their face) in every scene.
+                        "image_path": first_image if i == 0 else (avatar or None),
                         "avatar_path": avatar if (i == 0 and product and model_shot) else None,
                         "model_shot": (scene.get("first_frame") or None) if (i == 0 and model_shot) else None,
                         "line": (scene.get("line") or "").strip() if voice else "",
