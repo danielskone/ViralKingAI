@@ -331,7 +331,15 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
         scenes = [s for s in data.get("scenes", []) if s.get("prompt")][:n]
         if not scenes:
             raise ValueError("Script model returned no scenes")
-        return {"hook": data.get("hook", ""), "cta": data.get("cta", ""), "scenes": scenes}
+        cta = (data.get("cta") or "").strip()
+        if talk and cta:
+            # The viewer must HEAR the call to action, so make sure the last line has one.
+            last = (scenes[-1].get("line") or "").strip()
+            cta_words = ("link", "grab", "get yours", "get one", "get these", "shop", "order", "buy", "tap")
+            if not any(k in last.lower() for k in cta_words):
+                joined = f"{last.rstrip('.!?')}! {cta}".strip("! ") if last else cta
+                scenes[-1]["line"] = joined if len(joined.split()) <= 14 else cta
+        return {"hook": data.get("hook", ""), "cta": cta, "scenes": scenes}
 
     @modal.method()
     def run(self, job_id: str):
@@ -528,7 +536,8 @@ class VideoGenerator:
         img = cls._fit(Image.open(io.BytesIO(raw)), w, h).convert("RGB")
         if text:
             draw = ImageDraw.Draw(img)
-            size = max(28, w // 14)
+            # A slim bar near the bottom so the product stays visible.
+            size = max(24, min(w, h) // 18)
             font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
             words, lines = text.split(), [""]
             for word in words:  # wrap to the frame width
@@ -538,7 +547,7 @@ class VideoGenerator:
                 else:
                     lines[-1] = trial
             box_h = len(lines) * int(size * 1.3) + size
-            top = h - box_h - h // 12
+            top = h - box_h - h // 20
             draw.rounded_rectangle([w * 0.04, top, w * 0.96, top + box_h], radius=size // 2, fill=(0, 0, 0))
             for k, line in enumerate(lines):
                 tw = draw.textlength(line, font=font)
