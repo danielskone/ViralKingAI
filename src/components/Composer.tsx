@@ -81,7 +81,7 @@ function Picker({
 
 /** A chip that opens a small menu of choices (used for Format and Scenes). */
 function Dropdown<T extends string | number>({ icon, label, options, value, onChange }: {
-  icon: React.ReactNode; label: string; options: { value: T; label: string; hint?: string }[]; value: T; onChange: (v: T) => void;
+  icon: React.ReactNode; label: string; options: { value: T; label: string; hint?: string; shape?: React.ReactNode }[]; value: T; onChange: (v: T) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -107,15 +107,16 @@ function Dropdown<T extends string | number>({ icon, label, options, value, onCh
         <ChevronDown className={"h-3.5 w-3.5 opacity-70 transition " + (open ? "rotate-180" : "")} />
       </button>
       {open && (
-        <div role="listbox" className="absolute left-0 top-full z-20 mt-2 min-w-[12rem] rounded-2xl border border-border bg-panel p-1.5 shadow-2xl">
-          <p className="eyebrow px-3 pb-1 pt-2">{label}</p>
+        <div role="listbox" className="absolute left-0 top-full z-40 mt-2 max-h-[60vh] w-60 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border border-gold/30 bg-panel p-1.5 shadow-2xl shadow-black/60">
+          <p className="eyebrow px-3 pb-1 pt-1.5">{label}</p>
           {options.map((o) => (
             <button type="button" role="option" aria-selected={o.value === value} key={String(o.value)}
               onClick={() => { onChange(o.value); setOpen(false); }}
-              className={"flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition hover:bg-card " + (o.value === value ? "text-gold" : "text-foreground")}>
-              <span className="flex-1">
+              className={"flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition hover:bg-card " + (o.value === value ? "bg-gold/10 text-gold" : "text-foreground")}>
+              {o.shape && <span className="flex h-7 w-7 shrink-0 items-center justify-center">{o.shape}</span>}
+              <span className="min-w-0 flex-1 leading-tight">
                 {o.label}
-                {o.hint && <span className="block text-xs text-muted">{o.hint}</span>}
+                {o.hint && <span className="mt-0.5 block truncate text-xs text-muted">{o.hint}</span>}
               </span>
               {o.value === value && <Check className="h-4 w-4" />}
             </button>
@@ -126,10 +127,11 @@ function Dropdown<T extends string | number>({ icon, label, options, value, onCh
   );
 }
 
-const FORMATS: { value: "9:16" | "16:9" | "1:1"; label: string; hint: string }[] = [
-  { value: "9:16", label: "Vertical 9:16", hint: "TikTok, Reels, Shorts" },
-  { value: "16:9", label: "Wide 16:9", hint: "YouTube, website" },
-  { value: "1:1", label: "Square 1:1", hint: "Instagram & Facebook feed" },
+const Shape = ({ w, h }: { w: number; h: number }) => <span className="block rounded-[3px] border-[1.5px] border-current" style={{ width: w, height: h }} />;
+const FORMATS: { value: "9:16" | "16:9" | "1:1"; label: string; hint: string; shape: React.ReactNode }[] = [
+  { value: "9:16", label: "Vertical 9:16", hint: "TikTok, Reels, Shorts", shape: <Shape w={13} h={22} /> },
+  { value: "16:9", label: "Wide 16:9", hint: "YouTube, website", shape: <Shape w={24} h={14} /> },
+  { value: "1:1", label: "Square 1:1", hint: "Instagram & Facebook feed", shape: <Shape w={18} h={18} /> },
 ];
 const SCENES = [1, 2, 3, 4, 5].map((n) => ({ value: n, label: `${n} scene${n > 1 ? "s" : ""}`, hint: `About ${n * 5} seconds` }));
 

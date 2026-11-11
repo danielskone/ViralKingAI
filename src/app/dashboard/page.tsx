@@ -30,7 +30,7 @@ export default async function Dashboard() {
 
   return (
     <AppShell>
-      <div className="relative overflow-hidden">
+      <div className="relative">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(60%_60%_at_50%_0%,rgba(212,175,55,0.18),transparent_70%)]" />
         <section className="relative mx-auto max-w-3xl px-4 pb-10 pt-14 text-center sm:pt-20">
           <div className="mx-auto mb-5 flex w-fit items-center gap-2 rounded-full border border-gold/30 bg-gold/5 px-3 py-1 text-xs text-gold-light">
