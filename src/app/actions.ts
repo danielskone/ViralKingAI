@@ -171,7 +171,8 @@ export async function createAndGenerate(formData: FormData) {
       input: {
         scene_count: sceneCount,
         idea,
-        product_name: productName || null,
+        // Generic names ("Amazon product", "IMG_1234") make the script say them out loud, so skip them.
+        product_name: productName && !/^(amazon product|product from |img[_-]?\d|image|photo|screenshot)/i.test(productName) ? productName : null,
         product_path: productPath,
         avatar_path: avatarPath,
         model_shot: !!productPath && (formData.get("model_shot") === "on" || !!avatarPath),
@@ -205,6 +206,18 @@ export async function deleteLibraryItem(formData: FormData) {
   const { data } = await supabase.from("assets").select("storage_path, thumb_path").eq("id", id).single();
   if (data) await supabase.storage.from("media").remove([data.storage_path, data.thumb_path].filter((p): p is string => !!p));
   await supabase.from("assets").delete().eq("id", id);
+  revalidatePath("/media");
+  revalidatePath("/dashboard");
+}
+
+/** Rename a library item (the AI uses a product's name in the script and call to action). */
+export async function renameAsset(id: string, name: string) {
+  const clean = name.replace(/\s+/g, " ").trim().slice(0, 120);
+  if (!clean) return;
+  const supabase = await createClient();
+  const { data } = await supabase.from("assets").select("file_name").eq("id", id).single();
+  const ext = /\.(jpe?g|png|webp|gif|heic|avif|mp4|mov|webm)$/i.exec(data?.file_name ?? "")?.[0] ?? "";
+  await supabase.from("assets").update({ file_name: clean + ext }).eq("id", id);
   revalidatePath("/media");
   revalidatePath("/dashboard");
 }

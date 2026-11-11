@@ -52,4 +52,5 @@ export const Play = (p: P) => <S {...p}><path d="M8 5v14l11-7z" fill="currentCol
 export const Link = (p: P) => <S {...p}><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" /></S>;
 export const Mic = (p: P) => <S {...p}><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></S>;
 export const ChevronDown = (p: P) => <S {...p}><path d="m6 9 6 6 6-6" /></S>;
+export const Pencil = (p: P) => <S {...p}><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="m13.5 6.5 4 4" /></S>;
 export const Check = (p: P) => <S {...p}><path d="m5 12 5 5 9-10" /></S>;
