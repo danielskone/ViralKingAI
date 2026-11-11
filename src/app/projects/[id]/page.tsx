@@ -30,16 +30,21 @@ export default async function ProjectPage({
     supabase.from("generation_jobs").select("id, job_type, status, input, error, created_at, output").eq("project_id", id).order("created_at", { ascending: false }).limit(20),
   ]);
   if (!project || !user) notFound();
+  const tall = project.aspect_ratio === "9:16";
   const assets = await withUrls(supabase, assetRows ?? []);
   const clips = await Promise.all(
-    assets.filter((a) => a.kind === "generated_clip").reverse().map(async (c) => {
+    assets.filter((a) => a.kind === "generated_clip" || a.kind === "export").reverse().map(async (c) => {
       // A link that saves the file (Safari on iPhone ignores the download attribute on other sites).
       const { data } = await supabase.storage.from("media")
         .createSignedUrl(c.storage_path, 3600, { download: c.file_name || "viralking-video.mp4" });
       return { ...c, saveUrl: data?.signedUrl ?? c.url };
     }),
   );
-  const uploads = assets.filter((a) => a.kind !== "generated_clip");
+  const uploads = assets.filter((a) => a.kind !== "generated_clip" && a.kind !== "export");
+  // The newest joined video (all scenes back to back) goes on top; the scene clips follow.
+  const full = clips.find((c) => c.kind === "export");
+  const scenes = clips.filter((c) => c.kind !== "export");
+  const ratioClass = tall ? "aspect-[9/16]" : project.aspect_ratio === "1:1" ? "aspect-square" : "aspect-video";
 
   const run = latestRun(jobs ?? []);
   const busy = run.some((j) => j.status === "queued" || j.status === "running");
@@ -59,7 +64,6 @@ export default async function ProjectPage({
       lastIn.avatar_path ? { label: "Avatar", storage_path: lastIn.avatar_path } : null,
     ].filter(Boolean) as { label: string; storage_path: string }[],
   );
-  const tall = project.aspect_ratio === "9:16";
 
   return (
     <AppShell>
@@ -91,12 +95,28 @@ export default async function ProjectPage({
         <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
           {/* Results */}
           <section className="space-y-4">
-            <h2 className="eyebrow">Your clips</h2>
-            {clips.length ? (
+            {full && (
+              <div className="space-y-3">
+                <h2 className="eyebrow">Your full video</h2>
+                <div className={"gold-ring overflow-hidden rounded-2xl border border-gold/50 bg-black " + (tall ? "mx-auto max-w-sm" : "")}>
+                  {full.url && <video src={full.url} controls playsInline preload="metadata" className={"w-full " + ratioClass + " object-contain"} />}
+                  <div className="flex items-center justify-between gap-4 px-3 py-3 text-sm">
+                    {full.saveUrl && (
+                      <a href={full.saveUrl} download className="rounded-full bg-gold px-4 py-2 font-medium text-black hover:opacity-90">Save full video</a>
+                    )}
+                    <DeleteButton action={deleteAsset} fields={{ id: full.id, project_id: project.id }}
+                      label="this video"
+                      className="flex items-center gap-1 rounded-full px-3 py-2 text-xs text-muted hover:text-danger" iconClass="h-3.5 w-3.5" text="Delete" />
+                  </div>
+                </div>
+              </div>
+            )}
+            <h2 className="eyebrow">{full ? "Scenes" : "Your clips"}</h2>
+            {scenes.length ? (
               <div className={"grid gap-4 " + (tall ? "grid-cols-2" : "grid-cols-1")}>
-                {clips.map((c) => (
+                {scenes.map((c) => (
                   <div key={c.id} className="gold-ring overflow-hidden rounded-2xl border border-gold/30 bg-black">
-                    {c.url && <video src={c.url} controls playsInline loop preload="metadata" className={"w-full " + (tall ? "aspect-[9/16]" : project.aspect_ratio === "1:1" ? "aspect-square" : "aspect-video") + " object-contain"} />}
+                    {c.url && <video src={c.url} controls playsInline loop preload="metadata" className={"w-full " + ratioClass + " object-contain"} />}
                     <div className="flex items-center justify-between gap-4 px-3 py-3 text-sm">
                       {c.saveUrl && (
                         <a href={c.saveUrl} download className="rounded-full bg-gold px-4 py-2 font-medium text-black hover:opacity-90">Save video</a>

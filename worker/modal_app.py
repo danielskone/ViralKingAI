@@ -140,10 +140,11 @@ def _stage(sb, job_id: str, stage: str, t0: float):
 
 
 def _settle_project(sb, project_id: str):
-    """When no jobs are left running, mark the project ready (or failed if nothing worked)."""
+    """When no jobs are left running, mark the project ready (or failed if nothing worked).
+    The call that flips it out of "generating" also joins the scenes into one full video."""
     jobs = (
         sb.table("generation_jobs")
-        .select("status, job_type")
+        .select("id, status, job_type, input, output, owner_id, created_at")
         .eq("project_id", project_id)
         .execute()
         .data
@@ -151,7 +152,85 @@ def _settle_project(sb, project_id: str):
     if any(j["status"] in ("queued", "running") for j in jobs):
         return
     ok = any(j["status"] == "succeeded" and j["job_type"] == "video" for j in jobs)
-    sb.table("projects").update({"status": "ready" if ok else "failed"}).eq("id", project_id).execute()
+    # Only the one caller that actually changes the status gets rows back, so two scenes
+    # finishing at the same moment can't both build the full video.
+    flipped = (
+        sb.table("projects").update({"status": "ready" if ok else "failed"})
+        .eq("id", project_id).eq("status", "generating").execute().data
+    )
+    if not ok or not flipped:
+        return
+    try:
+        _make_full_video(sb, flipped[0], jobs)
+    except Exception as e:  # noqa: BLE001
+        # The separate scene clips are still there, so never fail the project over this.
+        print(f"joining the scenes failed: {e!r}", flush=True)
+
+
+def _make_full_video(sb, project: dict, jobs: list[dict]):
+    """Join the latest run's scene clips, in order, into one video saved as an "export" asset."""
+    scripts = sorted((j for j in jobs if j["job_type"] == "script" and j["status"] == "succeeded"),
+                     key=lambda j: j["created_at"])
+    if not scripts:
+        return
+    run_id = scripts[-1]["id"]
+    scenes = sorted(
+        (j for j in jobs if j["job_type"] == "video" and j["status"] == "succeeded"
+         and (j.get("input") or {}).get("script_job_id") == run_id
+         and (j.get("output") or {}).get("storage_path")),
+        key=lambda j: j["input"].get("scene_index", 0),
+    )
+    if len(scenes) < 2:
+        return
+    w, h = SIZES.get(project.get("aspect_ratio") or "9:16", SIZES["9:16"])
+    clips = [sb.storage.from_("media").download(j["output"]["storage_path"]) for j in scenes]
+    data = _join_clips(clips, w, h)
+    path = f"{project['owner_id']}/{project['id']}/generated/{run_id}-full.mp4"
+    sb.storage.from_("media").upload(path, data, {"content-type": "video/mp4", "upsert": "true"})
+    exists = sb.table("assets").select("id").eq("storage_path", path).execute().data
+    if not exists:
+        sb.table("assets").insert({
+            "owner_id": project["owner_id"],
+            "project_id": project["id"],
+            "kind": "export",
+            "storage_path": path,
+            "file_name": "Full video.mp4",
+            "mime_type": "video/mp4",
+            "size_bytes": len(data),
+        }).execute()
+
+
+def _join_clips(clips: list[bytes], w: int, h: int) -> bytes:
+    """Play the clips back to back as one mp4. Clips without sound get silence so the
+    voice stays in sync across the cuts."""
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        parts = []
+        for i, clip in enumerate(clips):
+            src, out = f"{d}/in{i}.mp4", f"{d}/part{i}.mp4"
+            open(src, "wb").write(clip)
+            has_audio = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", src],
+                capture_output=True, text=True,
+            ).stdout.strip() != ""
+            cmd = ["ffmpeg", "-y", "-i", src]
+            if not has_audio:
+                cmd += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-shortest"]
+            cmd += ["-map", "0:v:0", "-map", "0:a:0" if has_audio else "1:a:0",
+                    "-vf", f"fps={FPS},scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                           f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p",
+                    "-af", "aresample=44100,aformat=channel_layouts=stereo",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "160k", out]
+            subprocess.run(cmd, check=True, capture_output=True)
+            parts.append(out)
+        listing = f"{d}/list.txt"
+        open(listing, "w").write("".join(f"file '{p}'\n" for p in parts))
+        final = f"{d}/full.mp4"
+        subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listing, "-c", "copy",
+                        "-movflags", "+faststart", final], check=True, capture_output=True)
+        return open(final, "rb").read()
 
 
 def _exact_lines(idea: str, n: int) -> list[str | None] | None:
