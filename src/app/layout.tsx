@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Inter_Tight } from "next/font/google";
 import "./globals.css";
 import { GoldDefs } from "@/components/icons";
@@ -9,6 +9,15 @@ const interTight = Inter_Tight({ variable: "--font-inter-tight", subsets: ["lati
 export const metadata: Metadata = {
   title: "ViralKing AI",
   description: "Turn your ideas, product photos and videos into scroll-stopping social ads with your own AI.",
+  applicationName: "ViralKing",
+  appleWebApp: { capable: true, title: "ViralKing", statusBarStyle: "black" },
+  formatDetection: { telephone: false },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0a0a",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
