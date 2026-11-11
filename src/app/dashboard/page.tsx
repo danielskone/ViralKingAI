@@ -67,7 +67,8 @@ export default async function Dashboard() {
                 <Link key={p.id} href={`/projects/${p.id}`} className="group overflow-hidden rounded-2xl border border-border bg-card transition hover:border-gold/60">
                   <div className="relative aspect-[4/5] bg-panel">
                     {c?.url && isVideo(c.kind, c.mime_type) ? (
-                      <video src={c.url} muted loop playsInline autoPlay preload="metadata" className="h-full w-full object-cover" />
+                      // No autoplay: on a phone signal, several playing videos stall the whole page.
+                      <video src={`${c.url}#t=0.1`} muted playsInline preload="metadata" className="h-full w-full object-cover" />
                     ) : c?.url ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={c.thumb} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover transition group-hover:scale-[1.03]" />
