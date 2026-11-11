@@ -104,7 +104,7 @@ function Dropdown<T extends string | number>({ icon, label, options, value, onCh
     setPlaying(src);
     a.play().catch(() => setPlaying(null));
   };
-  useEffect(() => { if (!open) stop(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!open) stop(); }, [open]);
   const current = options.find((o) => o.value === value);
 
   useEffect(() => {
@@ -177,11 +177,11 @@ const SCENES = [1, 2, 3, 4, 5].map((n) => ({ value: n, label: `${n} scene${n > 1
 /** Ready-made ad ideas, matched to what's picked (avatar + product, product only, avatar only, nothing). */
 const AUTO: Record<"both" | "product" | "avatar" | "none", string[]> = {
   both: [
-    "The person holds the product up to the camera with a big genuine smile, then shows it off and turns slowly so we see every detail. Bright cozy home, soft window light, handheld phone-style UGC shot, warm and friendly.",
-    "The person is wearing the product and walks toward the camera with confidence, then stops, smiles and points to it. Golden-hour city street, shallow depth of field, slow tracking shot, warm cinematic film look.",
-    "Close-up unboxing moment: the person lifts the product out, reacts with excitement, then holds it next to their face and nods at the camera. Clean bright room, natural light, handheld vertical selfie-style shot.",
-    "The person shows the product in a festive living room with a glowing Christmas tree and twinkling lights, smiles and gestures toward it like a gift. Slow gentle push-in, warm cozy holiday lighting.",
-    "The person stands in a bright modern kitchen, picks up the product, looks impressed and gives a thumbs up to the camera. Steady medium shot slowly pushing in, soft morning light, clean commercial look.",
+    "The person holds the product up to the camera with a big genuine smile and talks about why they love it, turning it so we see every detail, then tells viewers to tap the link and grab one. Bright cozy home, soft window light, handheld phone-style UGC shot.",
+    "The person is wearing the product, walks toward the camera and explains what makes it so good, then points to it and tells viewers to get theirs today. Golden-hour city street, slow tracking shot, warm cinematic film look.",
+    "Unboxing review: the person lifts the product out, reacts with excitement and describes their favorite detail, then holds it next to their face and says to grab one before they sell out. Clean bright room, handheld selfie-style shot.",
+    "The person shows the product in a festive living room with a glowing Christmas tree, talks about why it makes the perfect gift, then tells viewers to tap the link and order now. Slow gentle push-in, warm cozy holiday lighting.",
+    "The person stands in a bright modern kitchen, picks up the product, explains the one problem it solves for them, then gives a thumbs up and tells viewers to shop it now. Steady medium shot slowly pushing in, soft morning light.",
   ],
   product: [
     "Slow cinematic push-in on the product on a dark marble pedestal, soft golden rim light, floating dust particles in the air, luxury commercial look, rich deep shadows.",

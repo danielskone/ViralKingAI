@@ -157,7 +157,8 @@ class ScriptWriter:
         )
         models.commit()
 
-    def _write(self, title: str, offer: str, idea: str, subject: str, n: int, talk: bool = False) -> dict:
+    def _write(self, title: str, offer: str, idea: str, subject: str, n: int, talk: bool = False,
+               product_name: str = "") -> dict:
         system = (
             "You are an award-winning commercial director writing shot prompts for the Wan 2.2 "
             "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
@@ -199,31 +200,50 @@ class ScriptWriter:
             )
         else:
             photo_rule = "No photo was uploaded; describe every scene fully."
+        sells = subject != "avatar" or bool(product_name)
+        thing = f'the product ("{product_name}")' if product_name else "the product"
+        cta_rule = (
+            f"The LAST scene's line must end with a clear call to action that sells {thing}: say the "
+            "product by name (or \"this\" if no real name is given) and tell viewers what to do now, e.g. "
+            "\"Tap the link and grab yours today!\" or \"Get yours before they sell out!\". "
+            "With only 1 scene, that one line is a quick hook plus the call to action."
+            if sells else
+            "The LAST scene's line ends with a clear call to action (follow, comment, or tap the link)."
+        )
         if talk and subject != "product":
             talk_rule = (
                 "The person TALKS to the camera in every scene, like a real UGC creator. In each prompt, "
                 "frame them in a medium close-up facing the camera, speaking with natural expressions and "
                 "gentle head movement, mouth clearly visible, nothing covering the face. For each scene also "
                 "write \"line\": exactly what they say out loud, 8-12 words, first person, casual and "
-                "convincing; scene 1 is a hook, the last scene ends with the call to action."
+                "convincing." + (" Every line is about the product: what it is, a benefit or detail they love, "
+                "and why the viewer needs it, while they hold, wear or point to it on camera."
+                if subject in ("product_model", "product_avatar") else "") + " Scene 1 opens with a hook. " + cta_rule
             )
         elif talk:
             talk_rule = (
                 "A narrator speaks over the video. For each scene also write \"line\": the voice-over for "
-                "that shot, 8-12 words, warm and persuasive; scene 1 is a hook, the last scene a call to action."
+                "that shot, 8-12 words, warm and persuasive. Scene 1 opens with a hook. " + cta_rule
             )
         else:
             talk_rule = ""
+        name_line = (f'Product name: "{product_name}" (if this looks like a file name such as IMG_1234 or '
+                     '"Product from amazon.com", it is not a real name: call it "this" instead).'
+                     if product_name else "")
         user = f"""Project: "{title}". Business / offer: "{offer or title}".
 Customer's idea for the video: "{idea or 'not given; choose a strong, scroll-stopping concept for this offer'}".
 {photo_rule}
 {talk_rule}
 
-Write {n} scene(s) for a short social media ad that follows the customer's idea closely.
+{name_line}
+Write {n} scene(s) for a short social media ad that follows the customer's idea closely. It must sell:
+the last scene shows the product clearly (in hand, worn, or as the hero of the shot) so the call to
+action lands, and its caption is the call to action.
 For each scene give:
 - "prompt": 70-110 words, in the style of this example: "{example}"
 - "caption": on-screen text for that scene, max 8 words.
-Also give "hook" (max 8 words) and "cta" (max 6 words).
+Also give "hook" (max 8 words) and "cta" (max 6 words): a call to action that names the product
+when a real name is known, e.g. "Shop the {{product}} now" or "Tap the link to get yours".
 JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "line": str (when asked), "first_frame": str (scene 1 only, when asked)}}]}}"""
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         ids = self.tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt").to("cuda")
@@ -267,7 +287,7 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                 subject = ("product_model" if model_shot else "product") if first_image else "none"
             voice = inp.get("voice") or None
             script = self._write(project["title"], project.get("offer_description") or "", idea, subject, n,
-                                 talk=bool(voice))
+                                 talk=bool(voice), product_name=(inp.get("product_name") or "").strip()[:120])
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.
