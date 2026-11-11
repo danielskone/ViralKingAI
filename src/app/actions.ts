@@ -195,6 +195,7 @@ export async function deleteLibraryItem(formData: FormData) {
   if (data) await supabase.storage.from("media").remove([data.storage_path, data.thumb_path].filter((p): p is string => !!p));
   await supabase.from("assets").delete().eq("id", id);
   revalidatePath("/media");
+  revalidatePath("/dashboard");
 }
 
 /* ---------- Add a product from a link ---------- */
