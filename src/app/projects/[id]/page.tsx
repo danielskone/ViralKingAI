@@ -10,7 +10,7 @@ import { deleteAsset, deleteProject, startGeneration } from "@/app/actions";
 import { Arrow, Box, Film, Trash, User } from "@/components/icons";
 import DeleteButton from "@/components/DeleteButton";
 
-type ScriptIn = { idea?: string; scene_count?: number; model_shot?: boolean; product_path?: string | null; avatar_path?: string | null };
+type ScriptIn = { idea?: string; scene_count?: number; model_shot?: boolean; product_path?: string | null; avatar_path?: string | null; voice?: string | null };
 
 export default async function ProjectPage({
   params,
@@ -41,6 +41,7 @@ export default async function ProjectPage({
   const lastIdea = lastIn.idea ?? project.offer_description ?? "";
   const lastCount = String(lastIn.scene_count ?? 1);
   const lastModelShot = lastIn.model_shot ?? true;
+  const lastVoice = lastIn.voice ?? "";
   const script = (lastScript?.status === "succeeded" ? lastScript.output : undefined) as
     | { hook?: string; cta?: string; scenes?: { prompt: string; caption?: string }[] }
     | undefined;
@@ -127,6 +128,15 @@ export default async function ProjectPage({
               <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
                 <select key={lastCount} name="scene_count" defaultValue={lastCount} className="chip appearance-none pr-3" disabled={busy}>
                   {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n} scene{n > 1 ? "s" : ""}</option>)}
+                </select>
+                <select key={"v" + lastVoice} name="voice" defaultValue={lastVoice} className="chip appearance-none pr-3" disabled={busy}>
+                  <option value="">Silent</option>
+                  <option value="af_heart">Woman · warm</option>
+                  <option value="af_bella">Woman · bright</option>
+                  <option value="am_michael">Man · natural</option>
+                  <option value="am_fenrir">Man · deep</option>
+                  <option value="bf_emma">Woman · British</option>
+                  <option value="bm_george">Man · British</option>
                 </select>
                 <label className="chip cursor-pointer">
                   <input type="checkbox" name="model_shot" defaultChecked={lastModelShot} disabled={busy} key={String(lastModelShot)} className="accent-[#d4af37]" />

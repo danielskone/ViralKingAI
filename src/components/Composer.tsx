@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createAndGenerate } from "@/app/actions";
 import { uploadToLibrary } from "@/components/LibraryUpload";
 import ProductLink from "@/components/ProductLink";
-import { Arrow, Box, Check, ChevronDown, Layers, Plus, Ratio, Sparkle, User } from "@/components/icons";
+import { Arrow, Box, Check, ChevronDown, Layers, Mic, Plus, Ratio, Sparkle, User } from "@/components/icons";
 
 type Item = { id: string; url?: string; thumb?: string; file_name: string | null };
 
@@ -139,6 +139,15 @@ const FORMATS: { value: "9:16" | "16:9" | "1:1"; label: string; hint: string; sh
   { value: "16:9", label: "Wide 16:9", hint: "YouTube, website", shape: <Shape w={24} h={14} /> },
   { value: "1:1", label: "Square 1:1", hint: "Instagram & Facebook feed", shape: <Shape w={18} h={18} /> },
 ];
+const VOICE_OPTS: { value: string; label: string; hint: string }[] = [
+  { value: "", label: "Silent", hint: "No voice, just video" },
+  { value: "af_heart", label: "Woman · warm", hint: "American, friendly" },
+  { value: "af_bella", label: "Woman · bright", hint: "American, upbeat" },
+  { value: "am_michael", label: "Man · natural", hint: "American, relaxed" },
+  { value: "am_fenrir", label: "Man · deep", hint: "American, bold" },
+  { value: "bf_emma", label: "Woman · British", hint: "British, polished" },
+  { value: "bm_george", label: "Man · British", hint: "British, classic" },
+];
 const SCENES = [1, 2, 3, 4, 5].map((n) => ({ value: n, label: `${n} scene${n > 1 ? "s" : ""}`, hint: `About ${n * 5} seconds` }));
 
 /** Ready-made ad ideas, matched to what's picked (avatar + product, product only, avatar only, nothing). */
@@ -174,6 +183,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
   const [aspect, setAspect] = useState<"9:16" | "16:9" | "1:1">("9:16");
   const [scenes, setScenes] = useState(1);
   const [modelShot, setModelShot] = useState(true);
+  const [voice, setVoice] = useState("af_heart");
   const [pending, setPending] = useState(false);
   const [autoN, setAutoN] = useState(0);
   const writeForMe = () => {
@@ -189,6 +199,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
       <input type="hidden" name="aspect_ratio" value={aspect} />
       <input type="hidden" name="scene_count" value={scenes} />
       <input type="hidden" name="model_shot" value={product && modelShot ? "on" : ""} />
+      <input type="hidden" name="voice" value={voice} />
       <textarea
         name="idea"
         value={idea}
@@ -204,6 +215,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
         <Picker icon={<User className="h-4 w-4" />} label="Avatar" items={avatars} value={avatar} onChange={setAvatar} kind="avatar" userId={userId} />
         <Dropdown icon={<Ratio className="h-4 w-4" />} label="Format" options={FORMATS} value={aspect} onChange={setAspect} />
         <Dropdown icon={<Layers className="h-4 w-4" />} label="Scenes" options={SCENES} value={scenes} onChange={setScenes} />
+        <Dropdown icon={<Mic className="h-4 w-4" />} label="Voice" options={VOICE_OPTS} value={voice} onChange={setVoice} />
         {product && !avatar && (
           <button type="button" onClick={() => setModelShot(!modelShot)} className={"chip" + (modelShot ? " chip-on" : "")}>
             <Sparkle className="h-4 w-4" /> On a model
