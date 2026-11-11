@@ -54,6 +54,7 @@ gpu_image = (
     .apt_install("ffmpeg")
     .pip_install(
         "torch==2.7.1",
+        "torchvision==0.22.1",  # the photo model's image processor needs it
         "diffusers==0.35.2",
         "transformers==4.57.1",
         "accelerate==1.10.1",
@@ -453,6 +454,7 @@ class VideoGenerator:
         inp, project_id = job["input"], job["project_id"]
         t0 = time.time()
         _stage(sb, job_id, "started", t0)
+        photo_note = ""
         try:
             w, h = SIZES.get(inp.get("aspect_ratio", "9:16"), SIZES["9:16"])
             common = dict(
@@ -497,6 +499,8 @@ class VideoGenerator:
                     except Exception as ee:  # noqa: BLE001
                         # Fall back to the avatar's own photo (or the product photo) rather than failing.
                         print(f"model photo failed, using the original photo: {ee!r}", flush=True)
+                        photo_note = f"failed: {ee!r}"[:300]
+                        _stage(sb, job_id, "model photo " + photo_note, t0)
                         fallback = sb.storage.from_("media").download(inp["avatar_path"]) if inp.get("avatar_path") else raw
                         image = self._fit(Image.open(io.BytesIO(fallback)), w, h)
                 _stage(sb, job_id, "animating", t0)
@@ -534,7 +538,8 @@ class VideoGenerator:
                 "mime_type": "video/mp4",
                 "size_bytes": len(data),
             }).execute().data[0]
-            _finish(sb, job_id, output={"asset_id": asset["id"], "storage_path": path, "voice": voice_mode},
+            _finish(sb, job_id, output={"asset_id": asset["id"], "storage_path": path, "voice": voice_mode,
+                                                 "model_photo": photo_note or None},
                     gpu_seconds=round(time.time() - t0, 1))
         except Exception as e:  # noqa: BLE001
             _finish(sb, job_id, error=e, gpu_seconds=round(time.time() - t0, 1))
