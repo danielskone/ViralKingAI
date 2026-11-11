@@ -183,30 +183,85 @@ const VOICE_OPTS: { value: string; label: string; hint: string; preview?: string
 const SCENES = [1, 2, 3, 4, 5].map((n) => ({ value: n, label: `${n} scene${n > 1 ? "s" : ""}`, hint: `About ${n * 5} seconds` }));
 
 /** Ready-made ad ideas, matched to what's picked (avatar + product, product only, avatar only, nothing). */
-const AUTO: Record<"both" | "product" | "avatar" | "none", string[]> = {
+type Idea = { label: string; text: string };
+const AUTO: Record<"both" | "product" | "avatar" | "none", Idea[]> = {
   both: [
-    "The person holds the product up to the camera with a big genuine smile and talks about why they love it, turning it so we see every detail, then tells viewers to tap the link and grab one. Bright cozy home, soft window light, handheld phone-style UGC shot.",
-    "The person is wearing the product, walks toward the camera and explains what makes it so good, then points to it and tells viewers to get theirs today. Golden-hour city street, slow tracking shot, warm cinematic film look.",
-    "Unboxing review: the person lifts the product out, reacts with excitement and describes their favorite detail, then holds it next to their face and says to grab one before they sell out. Clean bright room, handheld selfie-style shot.",
-    "The person shows the product in a festive living room with a glowing Christmas tree, talks about why it makes the perfect gift, then tells viewers to tap the link and order now. Slow gentle push-in, warm cozy holiday lighting.",
-    "The person stands in a bright modern kitchen, picks up the product, explains the one problem it solves for them, then gives a thumbs up and tells viewers to shop it now. Steady medium shot slowly pushing in, soft morning light.",
+    { label: "Holds it up and loves it", text: "The person holds the product up to the camera with a big genuine smile and talks about why they love it, turning it so we see every detail, then tells viewers to tap the link and grab one. Bright cozy home, soft window light, handheld phone-style UGC shot." },
+    { label: "TikTok Shop Christmas pick", text: "UGC TikTok Shop style: the person holds the product in a cozy decorated home with a glowing Christmas tree, smiles at the camera and says: \"Okay, I'm obsessed with these. They make every gift look so cute, and they're perfect for the holidays. Tap the link and grab yours before they sell out!\" Warm Christmas lighting, natural hand movements, slow handheld push-in." },
+    { label: "Unboxing reaction", text: "Unboxing review: the person lifts the product out, reacts with excitement and describes their favorite detail, then holds it next to their face and says to grab one before they sell out. Clean bright room, handheld selfie-style shot." },
+    { label: "Wearing it outside", text: "The person is wearing the product, walks toward the camera and explains what makes it so good, then points to it and tells viewers to get theirs today. Golden-hour city street, slow tracking shot, warm cinematic film look." },
+    { label: "Perfect gift", text: "The person shows the product in a festive living room with a glowing Christmas tree, talks about why it makes the perfect gift, then tells viewers to tap the link and order now. Slow gentle push-in, warm cozy holiday lighting." },
+    { label: "Solves my problem", text: "The person stands in a bright modern kitchen, picks up the product, explains the one problem it solves for them, then gives a thumbs up and tells viewers to shop it now. Steady medium shot slowly pushing in, soft morning light." },
+    { label: "Honest review", text: "The person sits on a couch, holds the product and gives an honest friend-to-friend review: what surprised them, what they use it for, and why it's worth it, then says to tap the link below. Cozy evening lamp light, handheld vertical shot." },
   ],
   product: [
-    "Slow cinematic push-in on the product on a dark marble pedestal, soft golden rim light, floating dust particles in the air, luxury commercial look, rich deep shadows.",
-    "The product slowly rotates on a clean white surface while soft light sweeps across it, highlighting textures and details, minimal premium studio commercial style.",
-    "The product sits in a festive scene with a glowing Christmas tree, gift boxes and gentle snowfall outside the window, slow orbit shot, warm cozy holiday lighting.",
-    "Dynamic product reveal: the camera glides past soft-focus foreground objects to reveal the product in sharp focus, warm sunset light streaming through a window, cinematic commercial look.",
+    { label: "Luxury pedestal", text: "Slow cinematic push-in on the product on a dark marble pedestal, soft golden rim light, floating dust particles in the air, luxury commercial look, rich deep shadows." },
+    { label: "Clean studio spin", text: "The product slowly rotates on a clean white surface while soft light sweeps across it, highlighting textures and details, minimal premium studio commercial style." },
+    { label: "Christmas scene", text: "The product sits in a festive scene with a glowing Christmas tree, gift boxes and gentle snowfall outside the window, slow orbit shot, warm cozy holiday lighting." },
+    { label: "Sunset reveal", text: "Dynamic product reveal: the camera glides past soft-focus foreground objects to reveal the product in sharp focus, warm sunset light streaming through a window, cinematic commercial look." },
   ],
   avatar: [
-    "The person looks into the camera with a warm confident smile, nods and starts talking enthusiastically like they're sharing a favorite find. Bright home, soft window light, handheld UGC phone shot.",
-    "The person walks through a bright sunny room toward the camera, waves hello and smiles, natural friendly energy, slow tracking shot, warm natural light.",
-    "The person laughs, turns to the camera and gestures excitedly as if revealing big news, cozy living room, warm lighting, handheld vertical selfie-style shot.",
+    { label: "Sharing a favorite find", text: "The person looks into the camera with a warm confident smile, nods and starts talking enthusiastically like they're sharing a favorite find. Bright home, soft window light, handheld UGC phone shot." },
+    { label: "Walks in and waves", text: "The person walks through a bright sunny room toward the camera, waves hello and smiles, natural friendly energy, slow tracking shot, warm natural light." },
+    { label: "Big news", text: "The person laughs, turns to the camera and gestures excitedly as if revealing big news, cozy living room, warm lighting, handheld vertical selfie-style shot." },
   ],
   none: [
-    "A confident young creator in a bright apartment smiles at the camera and holds up a sleek new product, handheld phone-style UGC shot, soft natural window light.",
-    "Slow cinematic push-in on a luxury product on a dark marble pedestal, golden rim light, floating dust particles, premium commercial look.",
+    { label: "Creator with product", text: "A confident young creator in a bright apartment smiles at the camera and holds up a sleek new product, handheld phone-style UGC shot, soft natural window light." },
+    { label: "Luxury product", text: "Slow cinematic push-in on a luxury product on a dark marble pedestal, golden rim light, floating dust particles, premium commercial look." },
   ],
 };
+
+/** "Write it for me" button with an arrow that opens a list of every ready-made idea. */
+function IdeaMenu({ ideas, label, onNext, onPick }: { ideas: Idea[]; label: string; onNext: () => void; onPick: (text: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent | TouchEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, []);
+  const groups: { title: string; items: Idea[] }[] = [
+    { title: "Ideas for your pick", items: ideas },
+    { title: "More styles", items: STARTERS },
+  ];
+  return (
+    <div ref={ref} className="relative">
+      <div className="inline-flex items-stretch overflow-hidden rounded-full border border-gold/70 bg-gold/10 text-xs font-medium text-gold-light">
+        <button type="button" onClick={onNext} className="inline-flex items-center gap-1.5 py-1.5 pl-3 pr-2.5 transition hover:bg-gold/15">
+          <Sparkle className="h-4 w-4" /> {label}
+        </button>
+        <button type="button" aria-haspopup="listbox" aria-expanded={open} aria-label="See all ideas" onClick={() => setOpen(!open)}
+          className={"flex items-center border-l border-gold/40 px-2 transition hover:bg-gold/15 " + (open ? "bg-gold/15" : "")}>
+          <ChevronDown className={"h-4 w-4 transition " + (open ? "rotate-180" : "")} />
+        </button>
+      </div>
+      {open && (
+        <div role="listbox" className="absolute left-0 top-full z-40 mt-2 max-h-[60vh] w-80 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border border-gold/30 bg-panel p-1.5 shadow-2xl shadow-black/60">
+          {groups.map((g) => (
+            <div key={g.title}>
+              <p className="eyebrow px-3 pb-1 pt-2">{g.title}</p>
+              {g.items.map((it) => (
+                <button type="button" role="option" aria-selected={false} key={g.title + it.label}
+                  onClick={() => { onPick(it.text); setOpen(false); }}
+                  className="block w-full rounded-xl px-3 py-2 text-left transition hover:bg-card">
+                  <span className="block text-sm font-medium text-foreground">{it.label}</span>
+                  <span className="line-clamp-2 block text-xs text-muted">{it.text}</span>
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Composer({ products, avatars, userId }: { products: Item[]; avatars: Item[]; userId: string }) {
   const [idea, setIdea] = useState("");
@@ -218,9 +273,9 @@ export default function Composer({ products, avatars, userId }: { products: Item
   const [voice, setVoice] = useState("af_heart");
   const [pending, setPending] = useState(false);
   const [autoN, setAutoN] = useState(0);
+  const ideas = AUTO[product && avatar ? "both" : product ? "product" : avatar ? "avatar" : "none"];
   const writeForMe = () => {
-    const list = AUTO[product && avatar ? "both" : product ? "product" : avatar ? "avatar" : "none"];
-    setIdea(list[autoN % list.length]);
+    setIdea(ideas[autoN % ideas.length].text);
     setAutoN(autoN + 1);
   };
 
@@ -259,9 +314,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
         </button>
       </div>
       <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
-        <button type="button" onClick={writeForMe} className="chip chip-on">
-          <Sparkle className="h-4 w-4" /> {idea && autoN ? "Another idea" : "Write it for me"}
-        </button>
+        <IdeaMenu ideas={ideas} label={idea && autoN ? "Another idea" : "Write it for me"} onNext={writeForMe} onPick={setIdea} />
         <span className="eyebrow mx-1 self-center">or try</span>
         {STARTERS.map((s) => (
           <button type="button" key={s.label} className="chip" onClick={() => setIdea(s.text)}>{s.label}</button>
