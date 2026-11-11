@@ -31,7 +31,14 @@ export default async function ProjectPage({
     supabase.from("generation_jobs").select("id, job_type, status, input, error, created_at, output").eq("project_id", id).order("created_at", { ascending: false }).limit(20),
   ]);
   const assets = await withUrls(supabase, assetRows ?? []);
-  const clips = assets.filter((a) => a.kind === "generated_clip").reverse();
+  const clips = await Promise.all(
+    assets.filter((a) => a.kind === "generated_clip").reverse().map(async (c) => {
+      // A link that saves the file (Safari on iPhone ignores the download attribute on other sites).
+      const { data } = await supabase.storage.from("media")
+        .createSignedUrl(c.storage_path, 3600, { download: c.file_name || "viralking-video.mp4" });
+      return { ...c, saveUrl: data?.signedUrl ?? c.url };
+    }),
+  );
   const uploads = assets.filter((a) => a.kind !== "generated_clip");
 
   const run = latestRun(jobs ?? []);
@@ -90,13 +97,14 @@ export default async function ProjectPage({
                 {clips.map((c) => (
                   <div key={c.id} className="gold-ring overflow-hidden rounded-2xl border border-gold/30 bg-black">
                     {c.url && <video src={c.url} controls playsInline loop className={"w-full " + (tall ? "aspect-[9/16]" : project.aspect_ratio === "1:1" ? "aspect-square" : "aspect-video") + " object-contain"} />}
-                    <div className="flex items-center justify-between px-3 py-2 text-xs">
-                      <span className="text-muted">{c.file_name}</span>
-                      <span className="flex items-center gap-3">
-                        {c.url && <a href={c.url} download className="text-gold hover:underline">Download</a>}
-                        <DeleteButton action={deleteAsset} fields={{ id: c.id, project_id: project.id }} label="this clip"
-                          className="flex items-center text-muted hover:text-danger" iconClass="h-3.5 w-3.5" />
-                      </span>
+                    <div className="flex items-center justify-between gap-4 px-3 py-3 text-sm">
+                      {c.saveUrl && (
+                        <a href={c.saveUrl} download className="rounded-full bg-gold px-4 py-2 font-medium text-black hover:opacity-90">Save video</a>
+                      )}
+                      {/* Kept far from Save so a missed tap can't hit it. */}
+                      <DeleteButton action={deleteAsset} fields={{ id: c.id, project_id: project.id }}
+                        label="this video"
+                        className="flex items-center gap-1 rounded-full px-3 py-2 text-xs text-muted hover:text-danger" iconClass="h-3.5 w-3.5" text="Delete" />
                     </div>
                   </div>
                 ))}
