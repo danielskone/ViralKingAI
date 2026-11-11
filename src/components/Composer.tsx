@@ -104,7 +104,7 @@ function Dropdown<T extends string | number>({ icon, label, options, value, onCh
     setPlaying(src);
     a.play().catch(() => setPlaying(null));
   };
-  useEffect(() => { if (!open) stop(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!open) stop(); }, [open]);
   const current = options.find((o) => o.value === value);
 
   useEffect(() => {
