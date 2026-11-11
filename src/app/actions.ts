@@ -269,6 +269,8 @@ export async function addProductFromUrl(raw: string): Promise<{ id: string } | {
 
   try {
     let res = await get(url, "text/html,image/*;q=0.9,*/*;q=0.8");
+    const amazon = /(^|\.)(amazon(\.[a-z.]+)?|amzn\.(to|eu|asia)|a\.co)$/i.test(url.hostname) && !/media-amazon\.com$/i.test(url.hostname);
+    if (!res.ok && amazon) return { error: "Amazon blocks product pages from being read automatically. On the Amazon page, right-click (Mac) or press and hold (iPhone) the main photo, choose Copy Image Address, and paste that here instead." };
     if (!res.ok) return { error: `That site refused the request (${res.status}). Save the product photo and use Upload instead.` };
     let name: string | null = null;
 
