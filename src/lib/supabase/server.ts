@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
@@ -24,3 +25,15 @@ export async function createClient() {
     },
   );
 }
+
+/**
+ * The signed-in user for this request, checked once and shared by the page and the
+ * app shell. getClaims() verifies the session token locally (no round trip to the
+ * auth server when the project uses signing keys), which keeps every page fast.
+ */
+export const getSessionUser = cache(async (): Promise<{ id: string; email: string | null } | null> => {
+  const supabase = await createClient();
+  const { data } = await supabase.auth.getClaims();
+  const c = data?.claims;
+  return c?.sub ? { id: c.sub, email: (c.email as string | undefined) ?? null } : null;
+});

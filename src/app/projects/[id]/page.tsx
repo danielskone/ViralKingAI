@@ -3,7 +3,7 @@ import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import Uploader from "@/components/Uploader";
 import JobsPanel from "@/components/JobsPanel";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getSessionUser } from "@/lib/supabase/server";
 import { latestRun } from "@/lib/jobs";
 import { isVideo, withUrls } from "@/lib/library";
 import { deleteAsset, deleteProject, startGeneration } from "@/app/actions";
@@ -22,14 +22,14 @@ export default async function ProjectPage({
   const { id } = await params;
   const { error: genError } = await searchParams;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data: project } = await supabase.from("projects").select("*").eq("id", id).maybeSingle();
-  if (!project || !user) notFound();
-
-  const [{ data: assetRows }, { data: jobs }] = await Promise.all([
+  // Everything the page needs, fetched at the same time instead of one after another.
+  const [user, { data: project }, { data: assetRows }, { data: jobs }] = await Promise.all([
+    getSessionUser(),
+    supabase.from("projects").select("*").eq("id", id).maybeSingle(),
     supabase.from("assets").select("id, kind, storage_path, thumb_path, file_name, mime_type").eq("project_id", id).order("created_at", { ascending: true }),
     supabase.from("generation_jobs").select("id, job_type, status, input, error, created_at, output").eq("project_id", id).order("created_at", { ascending: false }).limit(20),
   ]);
+  if (!project || !user) notFound();
   const assets = await withUrls(supabase, assetRows ?? []);
   const clips = await Promise.all(
     assets.filter((a) => a.kind === "generated_clip").reverse().map(async (c) => {
@@ -115,7 +115,7 @@ export default async function ProjectPage({
                 {busy ? "Your AI is filming… this takes about 10–15 minutes." : "No clips yet. Describe your ad and press Generate."}
               </div>
             )}
-            <JobsPanel key={lastScript?.id ?? "none"} projectId={project.id} initial={(jobs ?? []).map(({ output: _o, ...j }) => j)} />
+            <JobsPanel key={lastScript?.id ?? "none"} projectId={project.id} initial={(jobs ?? []).map((j) => ({ ...j, output: undefined }))} />
           </section>
 
           {/* Generate */}

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/supabase/server";
 import Mosaic from "@/components/Mosaic";
 import { Wordmark } from "@/components/AppShell";
 import { Box, Brand, Film, Sparkle, User } from "@/components/icons";
@@ -19,8 +19,7 @@ const FEATURES = [
 ];
 
 export default async function Home() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (user) redirect("/dashboard");
 
   return (

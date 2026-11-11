@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Suspense } from "react";
 import { signOut } from "@/app/actions";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getSessionUser } from "@/lib/supabase/server";
 import SidebarNav from "@/components/SidebarNav";
 import { Crown, LogOut, Menu } from "@/components/icons";
 
@@ -19,12 +19,10 @@ export function Wordmark({ href = "/dashboard" }: { href?: string }) {
 /** Logged-in layout: gold/black sidebar on desktop, a collapsible menu on phones. */
 export default async function AppShell({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  const { data: projects } = await supabase
-    .from("projects")
-    .select("id, title")
-    .order("updated_at", { ascending: false })
-    .limit(12);
+  const [user, { data: projects }] = await Promise.all([
+    getSessionUser(),
+    supabase.from("projects").select("id, title").order("updated_at", { ascending: false }).limit(12),
+  ]);
   return <ShellFrame email={user?.email} projects={projects ?? []}>{children}</ShellFrame>;
 }
 

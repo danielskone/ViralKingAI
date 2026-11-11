@@ -1,7 +1,7 @@
 import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import LibraryUpload from "@/components/LibraryUpload";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, getSessionUser } from "@/lib/supabase/server";
 import { isVideo, needsThumb, withUrls } from "@/lib/library";
 import ThumbBackfill from "@/components/ThumbBackfill";
 import ProductLink from "@/components/ProductLink";
@@ -32,15 +32,13 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
   const tab: Tab = (TABS.some((t) => t.id === sp.tab) ? sp.tab : "uploads") as Tab;
   const type = sp.type === "images" || sp.type === "videos" ? sp.type : "all";
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-
   let q = supabase.from("assets").select("id, kind, storage_path, thumb_path, file_name, mime_type, project_id, liked, created_at").order("created_at", { ascending: false }).limit(200);
   if (tab === "uploads") q = q.in("kind", ["image", "video", "logo", "product", "avatar"]);
   if (tab === "generations") q = q.in("kind", ["generated_clip", "export"]);
   if (tab === "liked") q = q.eq("liked", true);
   if (tab === "avatars") q = q.eq("kind", "avatar");
   if (tab === "products") q = q.eq("kind", "product");
-  const { data } = await q;
+  const [user, { data }] = await Promise.all([getSessionUser(), q]);
   let items = await withUrls(supabase, data ?? []);
   if (type === "images") items = items.filter((i) => !isVideo(i.kind, i.mime_type));
   if (type === "videos") items = items.filter((i) => isVideo(i.kind, i.mime_type));
