@@ -461,7 +461,9 @@ class VideoGenerator:
                 # Give the avatar a voice and sync their lips. If anything goes wrong the
                 # silent clip is still delivered rather than failing the whole scene.
                 try:
-                    talked = Talker().speak.remote(data, inp["line"], inp["voice"])
+                    # Leave time to save the clip before this container's own timeout.
+                    wait = max(60, VIDEO_TIMEOUT - (time.time() - t0) - 180)
+                    talked = Talker().speak.spawn(data, inp["line"], inp["voice"]).get(timeout=wait)
                     data, voice_mode = talked["video"], talked["mode"]
                 except Exception as te:  # noqa: BLE001
                     print(f"voice step failed, keeping silent clip: {te!r}", flush=True)
