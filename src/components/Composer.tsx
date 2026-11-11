@@ -29,13 +29,19 @@ function Picker({
   const chosen = items.find((i) => i.id === value);
 
   useEffect(() => {
-    const close = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const close = (e: MouseEvent | TouchEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
     document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
+    };
   }, []);
 
   return (
     <div ref={ref} className="relative">
+      {/* Phones: dim the page behind the sheet; tapping it closes the picker. */}
+      {open && <div className="fixed inset-0 z-40 bg-black/60 sm:hidden" onClick={() => setOpen(false)} />}
       <button type="button" onClick={() => setOpen(!open)} className={"chip" + (chosen ? " chip-on" : "")}>
         {chosen?.thumb ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -44,7 +50,7 @@ function Picker({
         {chosen ? (chosen.file_name ?? label).replace(/\.[a-z0-9]+$/i, "").slice(0, 18) : label}
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-gold/30 bg-panel p-3 shadow-2xl shadow-black/60">
+        <div className="fixed inset-x-3 bottom-3 z-50 rounded-2xl border border-gold/30 bg-panel p-3 shadow-2xl shadow-black/60 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:top-full sm:mt-2 sm:w-[22rem]">
           <div className="mb-2 flex items-center justify-between">
             <p className="eyebrow">Choose {label.toLowerCase()}</p>
             {value && <button type="button" className="text-xs text-muted hover:text-foreground" onClick={() => { onChange(null); setOpen(false); }}>Clear</button>}
@@ -54,9 +60,11 @@ function Picker({
               <ProductLink compact onAdded={(id) => { onChange(id); setOpen(false); }} />
             </div>
           )}
-          <div className="grid max-h-64 grid-cols-3 gap-2 overflow-y-auto">
-            <label className="flex aspect-square cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border text-xs text-muted hover:border-gold/60 hover:text-foreground">
+          <div className="grid max-h-[55vh] grid-cols-3 gap-2 overflow-y-auto overscroll-contain sm:max-h-64">
+            <label className="relative flex h-0 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-border pb-[100%] text-xs text-muted hover:border-gold/60 hover:text-foreground">
+              <span className="absolute inset-0 flex flex-col items-center justify-center gap-1">
               <Plus className="h-4 w-4" />{busy ? "Uploading…" : "Upload"}
+              </span>
               <input type="file" accept="image/*" className="hidden" disabled={busy} onChange={async (e) => {
                 const f = e.target.files?.[0];
                 e.target.value = "";
@@ -72,9 +80,9 @@ function Picker({
             </label>
             {items.map((i) => (
               <button type="button" key={i.id} onClick={() => { onChange(i.id); setOpen(false); }}
-                className={"relative aspect-square overflow-hidden rounded-xl border " + (i.id === value ? "border-gold" : "border-border hover:border-gold/60")}>
+                className={"relative h-0 overflow-hidden rounded-xl border pb-[100%] " + (i.id === value ? "border-gold" : "border-border hover:border-gold/60")}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                {i.thumb && <img src={i.thumb} alt={i.file_name ?? ""} loading="lazy" decoding="async" className="h-full w-full object-cover" />}
+                {i.thumb && <img src={i.thumb} alt={i.file_name ?? ""} loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" />}
                 {i.id === value && <span className="gold-bg absolute right-1 top-1 rounded-full p-0.5 text-black"><Check className="h-3 w-3" /></span>}
               </button>
             ))}
