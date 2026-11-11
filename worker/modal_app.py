@@ -72,7 +72,7 @@ gpu_image = (
 LS_DIR = "/opt/LatentSync"
 LS_COMMIT = "a229c3948406bc2cf6eaf4873e662e70c6a04746"
 talk_image = (
-    modal.Image.debian_slim(python_version="3.10")
+    modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg", "git", "libgl1", "libglib2.0-0", "espeak-ng", "build-essential")
     .pip_install("torch==2.5.1", "torchvision==0.20.1", index_url="https://download.pytorch.org/whl/cu121")
     .pip_install(
