@@ -128,7 +128,7 @@ export default async function ProjectPage({
                 name="idea"
                 defaultValue={lastIdea}
                 rows={5}
-                maxLength={600}
+                maxLength={3000}
                 disabled={busy}
                 className="w-full resize-y bg-transparent text-sm leading-relaxed outline-none placeholder:text-muted/70"
                 placeholder="Describe your video, e.g. A confident young man wearing this shirt walks through a snowy downtown street at night, slow cinematic tracking shot."

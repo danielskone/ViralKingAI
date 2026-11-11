@@ -154,16 +154,28 @@ def _settle_project(sb, project_id: str):
     sb.table("projects").update({"status": "ready" if ok else "failed"}).eq("id", project_id).execute()
 
 
-def _exact_lines(idea: str, n: int) -> list[str] | None:
+def _exact_lines(idea: str, n: int) -> list[str | None] | None:
     """If the customer put the spoken words in quotes, split exactly those words across the
-    n scenes (whole sentences, balanced by length) so the avatar says them word for word."""
+    n scenes (whole sentences, balanced by length) so the avatar says them word for word.
+    With fewer sentences than scenes, the first scenes get one sentence each and the rest
+    are None (those scenes keep the script writer's own line)."""
     quotes = re.findall(r'[\u201c"]([^\u201d"]{12,})[\u201d"]', idea or "")
     if not quotes or n < 1:
         return None
     text = " ".join(q.strip() for q in quotes)
     sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", text) if x.strip()]
+    # A tiny sentence like "Wait!" rides with the next one instead of being a scene alone.
+    merged: list[str] = []
+    for x in sentences:
+        if merged and len(merged[-1].split()) < 3:
+            merged[-1] = f"{merged[-1]} {x}"
+        else:
+            merged.append(x)
+    sentences = merged
     if not sentences:
         return None
+    if len(sentences) <= n:
+        return sentences + [None] * (n - len(sentences))
     total = sum(len(x.split()) for x in sentences)
     groups: list[list[str]] = [[] for _ in range(n)]
     done, g = 0, 0
@@ -206,7 +218,7 @@ def _append_card(video: bytes, card_png: bytes, w: int, h: int, seconds: float =
 # --------------------------------------------------------------------------- script
 
 
-@app.cls(gpu=["L4", "A10G", "L40S"], image=gpu_image, volumes={MODELS_DIR: models}, secrets=secrets,
+@app.cls(gpu=["L4", "A10G", "L40S", "A100-80GB", "H100"], image=gpu_image, volumes={MODELS_DIR: models}, secrets=secrets,
          timeout=600, scaledown_window=120)
 class ScriptWriter:
     @modal.enter()
@@ -412,7 +424,8 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
             if exact:
                 # The customer wrote the exact words to say: use them, not the model's lines.
                 for scene, line in zip(script["scenes"], exact):
-                    scene["line"] = line
+                    if line:
+                        scene["line"] = line
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.

@@ -52,7 +52,7 @@ export async function signOut() {
 export async function startGeneration(formData: FormData) {
   const projectId = String(formData.get("project_id"));
   const sceneCount = Math.min(Math.max(Number(formData.get("scene_count") ?? 3), 1), 5);
-  const idea = String(formData.get("idea") ?? "").trim().slice(0, 600);
+  const idea = String(formData.get("idea") ?? "").trim().slice(0, 3000);
   const supabase = await createClient();
 
   // RLS guarantees this only returns the caller's own project.
@@ -138,7 +138,7 @@ async function submitToWorker(jobId: string): Promise<string | null> {
 /** One-step create: new project from the composer, attach the chosen product/avatar, start the AI. */
 export async function createAndGenerate(formData: FormData) {
   // An empty idea is fine: the AI script writer then picks a strong concept for the product/avatar.
-  const idea = String(formData.get("idea") ?? "").trim().slice(0, 600);
+  const idea = String(formData.get("idea") ?? "").trim().slice(0, 3000);
   const aspect = ["9:16", "16:9", "1:1"].includes(String(formData.get("aspect_ratio"))) ? String(formData.get("aspect_ratio")) : "9:16";
   const sceneCount = Math.min(Math.max(Number(formData.get("scene_count") ?? 3), 1), 5);
   const productId = String(formData.get("product_id") ?? "") || null;

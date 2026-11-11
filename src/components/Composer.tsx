@@ -292,7 +292,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
         value={idea}
         onChange={(e) => setIdea(e.target.value)}
         rows={3}
-        maxLength={600}
+        maxLength={3000}
         placeholder={'Describe your ad, press "Write it for me", or leave it empty and the AI picks the idea.'}
         className="w-full resize-none bg-transparent text-base leading-relaxed text-foreground outline-none placeholder:text-muted/70"
         onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) (e.currentTarget.form as HTMLFormElement).requestSubmit(); }}
