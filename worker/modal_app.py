@@ -27,14 +27,14 @@ APP_NAME = "viralking-ai"
 LLM_ID = "Qwen/Qwen2.5-VL-7B-Instruct"  # sees the product photo, so scripts describe the real product
 VIDEO_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 EDIT_ID = "Qwen/Qwen-Image-Edit"  # Apache 2.0; puts the product on a model for the first frame
-EDIT_STEPS = 30
+EDIT_STEPS = 20  # 20 is plenty for a product-in-hand photo
 MODELS_DIR = "/models"
 
 # Wan 2.2 TI2V-5B native resolution is 1280x704 (or 704x1280), 24 fps.
 SIZES = {"9:16": (704, 1280), "16:9": (1280, 704), "1:1": (960, 960)}
 FPS = 24
 NUM_FRAMES = 121  # ~5 seconds; must be 4k+1
-STEPS = int(os.environ.get("WAN_STEPS", "40"))
+STEPS = int(os.environ.get("WAN_STEPS", "25"))  # 25 keeps quality, ~40% less GPU than 40
 VIDEO_TIMEOUT = 3600  # seconds Modal lets one clip run (photo edit + animation + voice)
 RENDER_BUDGET = VIDEO_TIMEOUT - 240  # stop early so the job is marked failed, not left "running"
 # Wan's own recommended negative prompt (the model was trained with it), plus English extras.
@@ -415,7 +415,7 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                     row, on_conflict="idempotency_key", ignore_duplicates=True
                 ).execute()
                 if res.data:
-                    VideoGenerator().run.spawn(res.data[0]["id"])
+                    make_scene.spawn(res.data[0]["id"])
         except Exception as e:  # noqa: BLE001
             _finish(sb, job_id, error=e, gpu_seconds=round(time.time() - t0, 1))
             _settle_project(sb, project_id)
@@ -481,7 +481,7 @@ class ImageEditor:
 
 
 @app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
-         secrets=secrets, timeout=VIDEO_TIMEOUT, scaledown_window=120, max_containers=2)
+         secrets=secrets, timeout=VIDEO_TIMEOUT, scaledown_window=60, max_containers=2)
 class VideoGenerator:
     @modal.enter()
     def load(self):
@@ -512,172 +512,192 @@ class VideoGenerator:
 
         return check
 
-    @staticmethod
-    def _fit(img, w: int, h: int):
-        """Fit the whole photo into the frame (nothing cut off). Empty space is filled
-        with a blurred, enlarged copy of the photo, like social apps do."""
-        from PIL import Image, ImageFilter
-
-        img = img.convert("RGB")
-        scale = max(w / img.width, h / img.height)
-        bg = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
-        bg = bg.crop(((bg.width - w) // 2, (bg.height - h) // 2, (bg.width - w) // 2 + w, (bg.height - h) // 2 + h))
-        bg = bg.filter(ImageFilter.GaussianBlur(40))
-        scale = min(w / img.width, h / img.height)
-        fg = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
-        bg.paste(fg, ((w - fg.width) // 2, (h - fg.height) // 2))
-        return bg
-
-    @classmethod
-    def _end_card(cls, raw: bytes, text: str, w: int, h: int) -> bytes:
-        """The customer's real product photo, fitted to the frame, with the call to action on it."""
-        from PIL import Image, ImageDraw, ImageFont
-
-        img = cls._fit(Image.open(io.BytesIO(raw)), w, h).convert("RGB")
-        if text:
-            draw = ImageDraw.Draw(img)
-            # A slim bar near the bottom so the product stays visible.
-            size = max(24, min(w, h) // 18)
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
-            words, lines = text.split(), [""]
-            for word in words:  # wrap to the frame width
-                trial = (lines[-1] + " " + word).strip()
-                if draw.textlength(trial, font=font) > w * 0.86 and lines[-1]:
-                    lines.append(word)
-                else:
-                    lines[-1] = trial
-            box_h = len(lines) * int(size * 1.3) + size
-            top = h - box_h - h // 20
-            draw.rounded_rectangle([w * 0.04, top, w * 0.96, top + box_h], radius=size // 2, fill=(0, 0, 0))
-            for k, line in enumerate(lines):
-                tw = draw.textlength(line, font=font)
-                draw.text(((w - tw) / 2, top + size // 2 + k * int(size * 1.3)), line, font=font, fill=(255, 215, 0))
-        buf = io.BytesIO()
-        img.save(buf, "PNG")
-        return buf.getvalue()
-
     @modal.method()
-    def run(self, job_id: str):
+    def animate(self, prompt: str, w: int, h: int, image_png: bytes | None, t0: float) -> bytes:
+        """Render one ~5 s clip and return it as mp4 bytes."""
         import tempfile
 
+        import torch
         from diffusers.utils import export_to_video
         from PIL import Image
 
-        sb = _sb()
-        job = _claim(sb, job_id)
-        if not job:
-            return
-        inp, project_id = job["input"], job["project_id"]
-        t0 = time.time()
-        _stage(sb, job_id, "started", t0)
-        photo_note = ""
+        common = dict(
+            prompt=prompt, negative_prompt=NEGATIVE, height=h, width=w,
+            num_frames=NUM_FRAMES, guidance_scale=5.0, num_inference_steps=STEPS,
+            callback_on_step_end=self._deadline(t0), callback_on_step_end_tensor_inputs=[],
+        )
         try:
-            w, h = SIZES.get(inp.get("aspect_ratio", "9:16"), SIZES["9:16"])
-            common = dict(
-                prompt=inp["prompt"], negative_prompt=NEGATIVE, height=h, width=w,
-                num_frames=NUM_FRAMES, guidance_scale=5.0, num_inference_steps=STEPS,
-                callback_on_step_end=self._deadline(t0), callback_on_step_end_tensor_inputs=[],
-            )
-            if inp.get("image_path"):
-                raw = sb.storage.from_("media").download(inp["image_path"])
-                image = self._fit(Image.open(io.BytesIO(raw)), w, h)
-                if inp.get("model_shot"):
-                    # Put the product on a person first, then animate that photo.
-                    instruction = inp["model_shot"]
-                    if inp.get("avatar_path"):
-                        # Avatar on the left, product on the right; ask for one merged photo.
-                        face = Image.open(io.BytesIO(sb.storage.from_("media").download(inp["avatar_path"])))
-                        half = w // 2
-                        board = Image.new("RGB", (w, h), "white")
-                        board.paste(self._fit(face, half, h), (0, 0))
-                        board.paste(self._fit(Image.open(io.BytesIO(raw)), w - half, h), (half, 0))
-                        image = board
-                        instruction = (
-                            "The left half shows a person and the right half shows a product. Create ONE "
-                            "single full-frame photo (no split screen, no collage) of that same person, "
-                            "same face and hair, wearing or using that exact product. " + instruction
-                        )
-                    buf = io.BytesIO()
-                    image.save(buf, "PNG")
-                    _stage(sb, job_id, "making the model photo", t0)
-                    try:
-                        # Bounded so the animation and voice still fit in this job's time.
-                        call = ImageEditor().edit.spawn(buf.getvalue(), instruction, job_id, t0)
-                        try:
-                            edited = call.get(timeout=1200)
-                        except BaseException:
-                            # Stop the photo GPU too, or it keeps billing after we give up.
-                            call.cancel()
-                            raise
-                        image = Image.open(io.BytesIO(edited)).convert("RGB").resize((w, h), Image.LANCZOS)
-                        frame_path = f"{job['owner_id']}/{project_id}/generated/{job_id}-frame.png"
-                        sb.storage.from_("media").upload(frame_path, edited, {"content-type": "image/png", "upsert": "true"})
-                    except Exception as ee:  # noqa: BLE001
-                        # Fall back to the avatar's own photo (or the product photo) rather than failing.
-                        print(f"model photo failed, using the original photo: {ee!r}", flush=True)
-                        photo_note = f"failed: {ee!r}"[:300]
-                        _stage(sb, job_id, "model photo " + photo_note, t0)
-                        fallback = sb.storage.from_("media").download(inp["avatar_path"]) if inp.get("avatar_path") else raw
-                        image = self._fit(Image.open(io.BytesIO(fallback)), w, h)
-                _stage(sb, job_id, "animating", t0)
+            if image_png:
+                image = Image.open(io.BytesIO(image_png)).convert("RGB")
                 frames = self.i2v(image=image, **common).frames[0]
             else:
-                _stage(sb, job_id, "animating", t0)
                 frames = self.t2v(**common).frames[0]
-
             with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
                 export_to_video(frames, f.name, fps=FPS)
-                data = open(f.name, "rb").read()
-
-            voice_mode = None
-            if inp.get("voice") and inp.get("line"):
-                # Give the avatar a voice and sync their lips. If anything goes wrong the
-                # silent clip is still delivered rather than failing the whole scene.
-                _stage(sb, job_id, "adding the voice", t0)
-                try:
-                    # Leave time to save the clip before this container's own timeout.
-                    wait = max(30, VIDEO_TIMEOUT - (time.time() - t0) - 240)
-                    talked = Talker().speak.spawn(data, inp["line"], inp["voice"]).get(timeout=wait)
-                    data, voice_mode = talked["video"], talked["mode"]
-                except Exception as te:  # noqa: BLE001
-                    print(f"voice step failed, keeping silent clip: {te!r}", flush=True)
-                    voice_mode = "failed"
-
-            if inp.get("end_card"):
-                _stage(sb, job_id, "adding the product end card", t0)
-                try:
-                    card = self._end_card(sb.storage.from_("media").download(inp["end_card"]),
-                                          inp.get("end_text") or "", w, h)
-                    data = _append_card(data, card, w, h)
-                except Exception as ce:  # noqa: BLE001
-                    print(f"end card failed, keeping the clip without it: {ce!r}", flush=True)
-
-            path = f"{job['owner_id']}/{project_id}/generated/{job_id}.mp4"
-            sb.storage.from_("media").upload(path, data, {"content-type": "video/mp4", "upsert": "true"})
-            asset = sb.table("assets").insert({
-                "owner_id": job["owner_id"],
-                "project_id": project_id,
-                "kind": "generated_clip",
-                "storage_path": path,
-                "file_name": f"Scene {inp.get('scene_index', 0) + 1}.mp4",
-                "mime_type": "video/mp4",
-                "size_bytes": len(data),
-            }).execute().data[0]
-            _finish(sb, job_id, output={"asset_id": asset["id"], "storage_path": path, "voice": voice_mode,
-                                                 "model_photo": photo_note or None},
-                    gpu_seconds=round(time.time() - t0, 1))
-        except Exception as e:  # noqa: BLE001
-            _finish(sb, job_id, error=e, gpu_seconds=round(time.time() - t0, 1))
-            raise
+                return open(f.name, "rb").read()
         finally:
-            _settle_project(sb, project_id)
-            # Release GPU memory so a failed job cannot starve the next one.
+            # Release GPU memory so a failed render cannot starve the next one.
             import gc
-
-            import torch
 
             gc.collect()
             torch.cuda.empty_cache()
+
+
+def _fit(img, w: int, h: int):
+    """Fit the whole photo into the frame (nothing cut off). Empty space is filled
+    with a blurred, enlarged copy of the photo, like social apps do."""
+    from PIL import Image, ImageFilter
+
+    img = img.convert("RGB")
+    scale = max(w / img.width, h / img.height)
+    bg = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
+    bg = bg.crop(((bg.width - w) // 2, (bg.height - h) // 2, (bg.width - w) // 2 + w, (bg.height - h) // 2 + h))
+    bg = bg.filter(ImageFilter.GaussianBlur(40))
+    scale = min(w / img.width, h / img.height)
+    fg = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
+    bg.paste(fg, ((w - fg.width) // 2, (h - fg.height) // 2))
+    return bg
+
+def _end_card(raw: bytes, text: str, w: int, h: int) -> bytes:
+    """The customer's real product photo, fitted to the frame, with the call to action on it."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = _fit(Image.open(io.BytesIO(raw)), w, h).convert("RGB")
+    if text:
+        draw = ImageDraw.Draw(img)
+        # A slim bar near the bottom so the product stays visible.
+        size = max(24, min(w, h) // 18)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+        words, lines = text.split(), [""]
+        for word in words:  # wrap to the frame width
+            trial = (lines[-1] + " " + word).strip()
+            if draw.textlength(trial, font=font) > w * 0.86 and lines[-1]:
+                lines.append(word)
+            else:
+                lines[-1] = trial
+        box_h = len(lines) * int(size * 1.3) + size
+        top = h - box_h - h // 20
+        draw.rounded_rectangle([w * 0.04, top, w * 0.96, top + box_h], radius=size // 2, fill=(0, 0, 0))
+        for k, line in enumerate(lines):
+            tw = draw.textlength(line, font=font)
+            draw.text(((w - tw) / 2, top + size // 2 + k * int(size * 1.3)), line, font=font, fill=(255, 215, 0))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+
+@app.function(image=gpu_image, secrets=secrets, timeout=VIDEO_TIMEOUT)
+def make_scene(job_id: str):
+    """Directs one scene on a cheap CPU container: model photo, animation and voice each
+    run on their own GPU, which is billed only while it works (not while it waits)."""
+    from PIL import Image
+
+    sb = _sb()
+    job = _claim(sb, job_id)
+    if not job:
+        return
+    inp, project_id = job["input"], job["project_id"]
+    t0 = time.time()
+    _stage(sb, job_id, "started", t0)
+    photo_note = ""
+    try:
+        w, h = SIZES.get(inp.get("aspect_ratio", "9:16"), SIZES["9:16"])
+        if inp.get("image_path"):
+            raw = sb.storage.from_("media").download(inp["image_path"])
+            image = _fit(Image.open(io.BytesIO(raw)), w, h)
+            if inp.get("model_shot"):
+                # Put the product on a person first, then animate that photo.
+                instruction = inp["model_shot"]
+                if inp.get("avatar_path"):
+                    # Avatar on the left, product on the right; ask for one merged photo.
+                    face = Image.open(io.BytesIO(sb.storage.from_("media").download(inp["avatar_path"])))
+                    half = w // 2
+                    board = Image.new("RGB", (w, h), "white")
+                    board.paste(_fit(face, half, h), (0, 0))
+                    board.paste(_fit(Image.open(io.BytesIO(raw)), w - half, h), (half, 0))
+                    image = board
+                    instruction = (
+                        "The left half shows a person and the right half shows a product. Create ONE "
+                        "single full-frame photo (no split screen, no collage) of that same person, "
+                        "same face and hair, wearing or using that exact product. " + instruction
+                    )
+                buf = io.BytesIO()
+                image.save(buf, "PNG")
+                _stage(sb, job_id, "making the model photo", t0)
+                try:
+                    # Bounded so the animation and voice still fit in this job's time.
+                    call = ImageEditor().edit.spawn(buf.getvalue(), instruction, job_id, t0)
+                    try:
+                        edited = call.get(timeout=1200)
+                    except BaseException:
+                        # Stop the photo GPU too, or it keeps billing after we give up.
+                        call.cancel()
+                        raise
+                    image = Image.open(io.BytesIO(edited)).convert("RGB").resize((w, h), Image.LANCZOS)
+                    frame_path = f"{job['owner_id']}/{project_id}/generated/{job_id}-frame.png"
+                    sb.storage.from_("media").upload(frame_path, edited, {"content-type": "image/png", "upsert": "true"})
+                except Exception as ee:  # noqa: BLE001
+                    # Fall back to the avatar's own photo (or the product photo) rather than failing.
+                    print(f"model photo failed, using the original photo: {ee!r}", flush=True)
+                    photo_note = f"failed: {ee!r}"[:300]
+                    _stage(sb, job_id, "model photo " + photo_note, t0)
+                    fallback = sb.storage.from_("media").download(inp["avatar_path"]) if inp.get("avatar_path") else raw
+                    image = _fit(Image.open(io.BytesIO(fallback)), w, h)
+        else:
+            image = None
+        _stage(sb, job_id, "animating", t0)
+        png = None
+        if image is not None:
+            buf = io.BytesIO()
+            image.save(buf, "PNG")
+            png = buf.getvalue()
+        data = VideoGenerator().animate.remote(inp["prompt"], w, h, png, t0)
+
+        voice_mode = None
+        if inp.get("voice") and inp.get("line"):
+            # Give the avatar a voice and sync their lips. If anything goes wrong the
+            # silent clip is still delivered rather than failing the whole scene.
+            _stage(sb, job_id, "adding the voice", t0)
+            try:
+                # Leave time to save the clip before this container's own timeout.
+                wait = max(30, VIDEO_TIMEOUT - (time.time() - t0) - 240)
+                talked = Talker().speak.spawn(data, inp["line"], inp["voice"]).get(timeout=wait)
+                data, voice_mode = talked["video"], talked["mode"]
+            except Exception as te:  # noqa: BLE001
+                print(f"voice step failed, keeping silent clip: {te!r}", flush=True)
+                voice_mode = "failed"
+
+        if inp.get("end_card"):
+            _stage(sb, job_id, "adding the product end card", t0)
+            try:
+                card = _end_card(sb.storage.from_("media").download(inp["end_card"]),
+                                      inp.get("end_text") or "", w, h)
+                data = _append_card(data, card, w, h)
+            except Exception as ce:  # noqa: BLE001
+                print(f"end card failed, keeping the clip without it: {ce!r}", flush=True)
+
+        path = f"{job['owner_id']}/{project_id}/generated/{job_id}.mp4"
+        sb.storage.from_("media").upload(path, data, {"content-type": "video/mp4", "upsert": "true"})
+        asset = sb.table("assets").insert({
+            "owner_id": job["owner_id"],
+            "project_id": project_id,
+            "kind": "generated_clip",
+            "storage_path": path,
+            "file_name": f"Scene {inp.get('scene_index', 0) + 1}.mp4",
+            "mime_type": "video/mp4",
+            "size_bytes": len(data),
+        }).execute().data[0]
+        _finish(sb, job_id, output={"asset_id": asset["id"], "storage_path": path, "voice": voice_mode,
+                                             "model_photo": photo_note or None},
+                gpu_seconds=round(time.time() - t0, 1))
+    except Exception as e:  # noqa: BLE001
+        _finish(sb, job_id, error=e, gpu_seconds=round(time.time() - t0, 1))
+        raise
+    finally:
+        _settle_project(sb, project_id)
+
+
 
 
 # --------------------------------------------------------------------------- talking avatar
@@ -895,7 +915,7 @@ async def submit(request: Request):
     if job.data["job_type"] == "script":
         ScriptWriter().run.spawn(job_id)
     elif job.data["job_type"] == "video":
-        VideoGenerator().run.spawn(job_id)
+        make_scene.spawn(job_id)
     else:
         raise HTTPException(status_code=400, detail="unsupported job type")
     return {"ok": True}
