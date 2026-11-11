@@ -6,28 +6,27 @@ import { createClient } from "@/lib/supabase/client";
 import { saveThumb } from "@/lib/thumbs";
 
 /**
- * One-time catch-up: photos uploaded before previews existed get a small preview made in the browser.
- * Runs quietly in the background, a few at a time, then refreshes the page so the fast previews show.
+ * Catch-up: photos without a small preview (older uploads, products added from a link) get one made
+ * in the browser, a few at a time, then the page refreshes so the fast previews show.
  */
 export default function ThumbBackfill({ userId, items }: { userId: string; items: { id: string; url?: string }[] }) {
   const router = useRouter();
-  const started = useRef(false);
-  const [left, setLeft] = useState(items.length);
+  const seen = useRef(new Set<string>());
+  const [left, setLeft] = useState(0);
 
   useEffect(() => {
-    if (started.current || !items.length) return;
-    started.current = true;
+    const queue = items.filter((i) => i.url && !seen.current.has(i.id));
+    if (!queue.length) return;
+    queue.forEach((i) => seen.current.add(i.id));
     const supabase = createClient();
-    const queue = items.filter((i) => i.url);
-    let done = 0;
+    setLeft((n) => n + queue.length);
     const worker = async () => {
       for (let it = queue.shift(); it; it = queue.shift()) {
         try {
           const res = await fetch(it.url!);
           if (res.ok) await saveThumb(supabase, userId, it.id, await res.blob());
         } catch {}
-        done++;
-        setLeft(items.length - done);
+        setLeft((n) => n - 1);
       }
     };
     Promise.all([worker(), worker(), worker()]).then(() => router.refresh());

@@ -195,3 +195,117 @@ export async function deleteLibraryItem(formData: FormData) {
   await supabase.from("assets").delete().eq("id", id);
   revalidatePath("/media");
 }
+
+/* ---------- Add a product from a link ---------- */
+
+const UA = "Mozilla/5.0 (compatible; ViralKingAI/1.0; +https://viralkingai.vercel.app)";
+
+function decodeHtml(s: string) {
+  return s
+    .replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#x2F;/gi, "/").replace(/\\u002F/gi, "/").trim();
+}
+
+function meta(html: string, key: string) {
+  const a = new RegExp(`<meta[^>]+(?:property|name)=["']${key}["'][^>]*content=["']([^"']+)["']`, "i").exec(html);
+  const b = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:property|name)=["']${key}["']`, "i").exec(html);
+  return decodeHtml((a ?? b)?.[1] ?? "") || null;
+}
+
+/** Find the main product photo and name on a shop page (Shopify, Etsy, WooCommerce, Amazon, most stores). */
+function findProduct(html: string) {
+  let image =
+    meta(html, "og:image:secure_url") ?? meta(html, "og:image") ?? meta(html, "twitter:image") ?? meta(html, "twitter:image:src");
+  let name = meta(html, "og:title") ?? meta(html, "twitter:title");
+  // Structured product data (schema.org JSON-LD)
+  if (!image || !name) {
+    for (const m of html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)) {
+      try {
+        const nodes = [JSON.parse(m[1])].flat().flatMap((n) => (n?.["@graph"] ? n["@graph"] : [n]));
+        const p = nodes.find((n) => [n?.["@type"]].flat().includes("Product"));
+        if (!p) continue;
+        const img = [p.image].flat()[0];
+        image ??= typeof img === "string" ? img : img?.url ?? null;
+        name ??= p.name ?? null;
+        break;
+      } catch {}
+    }
+  }
+  // Amazon's main image
+  image ??= decodeHtml(/data-old-hires=["']([^"']+)["']/i.exec(html)?.[1] ?? /"hiRes":"([^"]+)"/.exec(html)?.[1] ?? "") || null;
+  image ??= decodeHtml(/<link[^>]+rel=["']image_src["'][^>]*href=["']([^"']+)["']/i.exec(html)?.[1] ?? "") || null;
+  name ??= decodeHtml(/<title[^>]*>([^<]+)<\/title>/i.exec(html)?.[1] ?? "") || null;
+  return { image, name };
+}
+
+function safeUrl(raw: string) {
+  let u: URL;
+  try {
+    u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  const h = u.hostname;
+  if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal") || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|0\.|\[)/.test(h)) return null;
+  return u;
+}
+
+async function get(url: URL, accept: string) {
+  return fetch(url, {
+    headers: { "user-agent": UA, accept, "accept-language": "en-US,en;q=0.9" },
+    redirect: "follow",
+    signal: AbortSignal.timeout(15000),
+  });
+}
+
+/** Paste a product page (or a direct photo link): saves the product photo to your Products library. */
+export async function addProductFromUrl(raw: string): Promise<{ id: string } | { error: string }> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: "Please sign in again." };
+  const url = safeUrl(raw.trim());
+  if (!url) return { error: "That doesn't look like a web link." };
+
+  try {
+    let res = await get(url, "text/html,image/*;q=0.9,*/*;q=0.8");
+    if (!res.ok) return { error: `That site refused the request (${res.status}). Save the product photo and use Upload instead.` };
+    let name: string | null = null;
+
+    if (!res.headers.get("content-type")?.startsWith("image/")) {
+      const html = (await res.text()).slice(0, 3_000_000);
+      const found = findProduct(html);
+      if (!found.image) return { error: "Couldn't find a product photo on that page. Save the photo and use Upload instead." };
+      name = found.name;
+      const imgUrl = safeUrl(new URL(found.image, res.url).toString());
+      if (!imgUrl) return { error: "Couldn't load that product photo." };
+      res = await get(imgUrl, "image/*");
+      if (!res.ok || !res.headers.get("content-type")?.startsWith("image/")) return { error: "Couldn't download that product photo. Save it and use Upload instead." };
+    }
+
+    const type = res.headers.get("content-type")!.split(";")[0];
+    const bytes = await res.arrayBuffer();
+    if (bytes.byteLength > 20_000_000) return { error: "That photo is over 20 MB." };
+    if (bytes.byteLength < 2_000) return { error: "That photo is too small to use." };
+    const ext = type.split("/")[1]?.replace("jpeg", "jpg").replace(/[^a-z0-9]/g, "") || "jpg";
+    const title = (name ?? url.hostname).replace(/\s+/g, " ").slice(0, 80);
+    const path = `${user.id}/library/${crypto.randomUUID()}-link.${ext}`;
+
+    const { error: upErr } = await supabase.storage.from("media").upload(path, bytes, { contentType: type });
+    if (upErr) return { error: upErr.message };
+    const { data, error } = await supabase
+      .from("assets")
+      .insert({ kind: "product", storage_path: path, file_name: title, mime_type: type, size_bytes: bytes.byteLength })
+      .select("id")
+      .single();
+    if (error) {
+      await supabase.storage.from("media").remove([path]);
+      return { error: error.message };
+    }
+    revalidatePath("/dashboard");
+    revalidatePath("/media");
+    return { id: data.id as string };
+  } catch (e) {
+    return { error: (e as Error).name === "TimeoutError" ? "That site took too long to answer." : "Couldn't open that link." };
+  }
+}

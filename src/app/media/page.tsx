@@ -4,6 +4,7 @@ import LibraryUpload from "@/components/LibraryUpload";
 import { createClient } from "@/lib/supabase/server";
 import { isVideo, needsThumb, withUrls } from "@/lib/library";
 import ThumbBackfill from "@/components/ThumbBackfill";
+import ProductLink from "@/components/ProductLink";
 import { deleteLibraryItem, toggleLike } from "@/app/actions";
 import { Heart, Trash } from "@/components/icons";
 
@@ -64,6 +65,8 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
             </div>
           )}
         </div>
+
+        {tab === "products" && <div className="mt-6 max-w-xl"><ProductLink /></div>}
 
         <div className={"mt-6 grid gap-4 " + (portrait ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-5" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5")}>
           {copy.upload && <LibraryUpload userId={user!.id} kind={copy.upload.kind} label={copy.upload.label} />}
