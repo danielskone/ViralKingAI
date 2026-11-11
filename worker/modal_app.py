@@ -89,6 +89,7 @@ talk_image = (
     .run_commands(f"git clone https://github.com/bytedance/LatentSync {LS_DIR} && cd {LS_DIR} && git checkout {LS_COMMIT}")
     .env({"HF_HOME": MODELS_DIR, "HF_HUB_ENABLE_HF_TRANSFER": "1", "PYTHONPATH": LS_DIR})
 )
+LIPSYNC_STEPS = int(os.environ.get("LIPSYNC_STEPS", "12"))  # was 20; mouths still look right
 TALK_SECONDS = NUM_FRAMES / FPS  # one spoken line per ~5 s clip
 
 web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
@@ -703,8 +704,10 @@ def make_scene(job_id: str):
 # --------------------------------------------------------------------------- talking avatar
 
 
-@app.cls(gpu=["L40S", "A100-80GB", "H100"], image=talk_image, volumes={MODELS_DIR: models},
-         timeout=2400, scaledown_window=60, max_containers=2)
+# Lip sync fits in 24 GB, so it runs on mid-range GPUs only (never the pricey A100/H100),
+# and the GPU shuts off 20 s after the last line instead of idling for a minute.
+@app.cls(gpu=["L40S", "A10G", "L4"], image=talk_image, volumes={MODELS_DIR: models},
+         timeout=2400, scaledown_window=20, max_containers=2)
 class Talker:
     @modal.enter()
     def load(self):
@@ -802,7 +805,7 @@ class Talker:
             try:
                 self.lipsync(
                     video_path=src25, audio_path=wav, video_out_path=out,
-                    num_frames=self.config.data.num_frames, num_inference_steps=20, guidance_scale=1.5,
+                    num_frames=self.config.data.num_frames, num_inference_steps=LIPSYNC_STEPS, guidance_scale=1.5,
                     weight_dtype=self.dtype, width=self.config.data.resolution,
                     height=self.config.data.resolution, mask_image_path=self.config.data.mask_image_path,
                     temp_dir=f"{tmp}/ls",
