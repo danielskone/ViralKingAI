@@ -27,6 +27,7 @@ APP_NAME = "viralking-ai"
 LLM_ID = "Qwen/Qwen2.5-7B-Instruct"
 VIDEO_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 EDIT_ID = "Qwen/Qwen-Image-Edit"  # Apache 2.0; puts the product on a model for the first frame
+EDIT_STEPS = 30
 MODELS_DIR = "/models"
 
 # Wan 2.2 TI2V-5B native resolution is 1280x704 (or 704x1280), 24 fps.
@@ -336,28 +337,52 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
 
 
 @app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
-         timeout=2400, scaledown_window=60, max_containers=2)
+         secrets=secrets, timeout=1500, scaledown_window=60, max_containers=2)
 class ImageEditor:
-    @modal.enter()
-    def load(self):
+    pipe = None
+
+    def _load(self, report):
+        """Load lazily inside the call, so a slow load shows up on the job's stage."""
+        if self.pipe is not None:
+            return
         import torch
         from diffusers import QwenImageEditPipeline
 
+        report("model photo: loading the photo model")
         self.pipe = QwenImageEditPipeline.from_pretrained(EDIT_ID, torch_dtype=torch.bfloat16).to("cuda")
-        models.commit()
 
     @modal.method()
-    def edit(self, image_png: bytes, prompt: str) -> bytes:
+    def edit(self, image_png: bytes, prompt: str, job_id: str = "", t0: float = 0.0) -> bytes:
         """Turn a product photo into a photo of a person wearing/using it. The input is
         already padded to the video's aspect ratio, so the output keeps that ratio."""
         import torch
         from PIL import Image
 
+        sb = _sb() if job_id else None
+        t0 = t0 or time.time()
+
+        def report(stage):
+            if sb:
+                _stage(sb, job_id, stage, t0)
+            else:
+                print(stage, flush=True)
+
+        report(f"model photo: GPU ready ({torch.cuda.get_device_name(0)})")
+        self._load(report)
+        steps = EDIT_STEPS
+
+        def tick(_pipe, step, _t, kwargs):
+            if (step + 1) % 5 == 0 or step == 0:
+                report(f"model photo: step {step + 1}/{steps}")
+            return kwargs
+
         img = Image.open(io.BytesIO(image_png)).convert("RGB")
         out = self.pipe(
             image=img, prompt=prompt, negative_prompt=" ", true_cfg_scale=4.0,
-            num_inference_steps=40, generator=torch.Generator("cuda").manual_seed(0),
+            num_inference_steps=steps, generator=torch.Generator("cuda").manual_seed(0),
+            callback_on_step_end=tick,
         ).images[0]
+        report("model photo: done")
         buf = io.BytesIO()
         out.save(buf, "PNG")
         return buf.getvalue()
@@ -459,7 +484,13 @@ class VideoGenerator:
                     _stage(sb, job_id, "making the model photo", t0)
                     try:
                         # Bounded so the animation and voice still fit in this job's time.
-                        edited = ImageEditor().edit.spawn(buf.getvalue(), instruction).get(timeout=1200)
+                        call = ImageEditor().edit.spawn(buf.getvalue(), instruction, job_id, t0)
+                        try:
+                            edited = call.get(timeout=1200)
+                        except BaseException:
+                            # Stop the photo GPU too, or it keeps billing after we give up.
+                            call.cancel()
+                            raise
                         image = Image.open(io.BytesIO(edited)).convert("RGB").resize((w, h), Image.LANCZOS)
                         frame_path = f"{job['owner_id']}/{project_id}/generated/{job_id}-frame.png"
                         sb.storage.from_("media").upload(frame_path, edited, {"content-type": "image/png", "upsert": "true"})
