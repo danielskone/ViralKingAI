@@ -8,6 +8,7 @@ import { latestRun } from "@/lib/jobs";
 import { isVideo, withUrls } from "@/lib/library";
 import { deleteAsset, deleteProject, startGeneration } from "@/app/actions";
 import { Arrow, Box, Film, Trash, User } from "@/components/icons";
+import DeleteButton from "@/components/DeleteButton";
 
 type ScriptIn = { idea?: string; scene_count?: number; model_shot?: boolean; product_path?: string | null; avatar_path?: string | null };
 
@@ -90,7 +91,11 @@ export default async function ProjectPage({
                     {c.url && <video src={c.url} controls playsInline loop className={"w-full " + (tall ? "aspect-[9/16]" : project.aspect_ratio === "1:1" ? "aspect-square" : "aspect-video") + " object-contain"} />}
                     <div className="flex items-center justify-between px-3 py-2 text-xs">
                       <span className="text-muted">{c.file_name}</span>
-                      {c.url && <a href={c.url} download className="text-gold hover:underline">Download</a>}
+                      <span className="flex items-center gap-3">
+                        {c.url && <a href={c.url} download className="text-gold hover:underline">Download</a>}
+                        <DeleteButton action={deleteAsset} fields={{ id: c.id, project_id: project.id }} label="this clip"
+                          className="flex items-center text-muted hover:text-danger" iconClass="h-3.5 w-3.5" />
+                      </span>
                     </div>
                   </div>
                 ))}

@@ -6,7 +6,8 @@ import { isVideo, needsThumb, withUrls } from "@/lib/library";
 import ThumbBackfill from "@/components/ThumbBackfill";
 import ProductLink from "@/components/ProductLink";
 import { deleteLibraryItem, toggleLike } from "@/app/actions";
-import { Heart, Trash } from "@/components/icons";
+import { Heart } from "@/components/icons";
+import DeleteButton from "@/components/DeleteButton";
 
 const TABS = [
   { id: "uploads", label: "Uploads" },
@@ -88,14 +89,7 @@ export default async function MediaPage({ searchParams }: { searchParams: Promis
                     <Heart className="h-4 w-4" filled={i.liked} />
                   </button>
                 </form>
-                {!i.project_id && (
-                  <form action={deleteLibraryItem}>
-                    <input type="hidden" name="id" value={i.id} />
-                    <button title="Delete" className="flex h-8 w-8 items-center justify-center rounded-full bg-black/70 text-foreground backdrop-blur hover:text-danger">
-                      <Trash className="h-4 w-4" />
-                    </button>
-                  </form>
-                )}
+                <DeleteButton action={deleteLibraryItem} fields={{ id: i.id }} label={isVideo(i.kind, i.mime_type) ? "this video" : "this photo"} />
               </div>
               {i.liked && <Heart className="absolute left-2 top-2 h-4 w-4 text-gold sm:group-hover:opacity-0" filled />}
               <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
