@@ -96,7 +96,7 @@ export default async function ProjectPage({
               <div className={"grid gap-4 " + (tall ? "grid-cols-2" : "grid-cols-1")}>
                 {clips.map((c) => (
                   <div key={c.id} className="gold-ring overflow-hidden rounded-2xl border border-gold/30 bg-black">
-                    {c.url && <video src={c.url} controls playsInline loop className={"w-full " + (tall ? "aspect-[9/16]" : project.aspect_ratio === "1:1" ? "aspect-square" : "aspect-video") + " object-contain"} />}
+                    {c.url && <video src={c.url} controls playsInline loop preload="metadata" className={"w-full " + (tall ? "aspect-[9/16]" : project.aspect_ratio === "1:1" ? "aspect-square" : "aspect-video") + " object-contain"} />}
                     <div className="flex items-center justify-between gap-4 px-3 py-3 text-sm">
                       {c.saveUrl && (
                         <a href={c.saveUrl} download className="rounded-full bg-gold px-4 py-2 font-medium text-black hover:opacity-90">Save video</a>
