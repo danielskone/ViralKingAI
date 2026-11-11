@@ -24,7 +24,7 @@ import time
 import modal
 
 APP_NAME = "viralking-ai"
-LLM_ID = "Qwen/Qwen2.5-7B-Instruct"
+LLM_ID = "Qwen/Qwen2.5-VL-7B-Instruct"  # sees the product photo, so scripts describe the real product
 VIDEO_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 EDIT_ID = "Qwen/Qwen-Image-Edit"  # Apache 2.0; puts the product on a model for the first frame
 EDIT_STEPS = 30
@@ -51,7 +51,7 @@ secrets = [modal.Secret.from_name("viralking-secrets")]
 
 gpu_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg")
+    .apt_install("ffmpeg", "fonts-dejavu-core")
     .pip_install(
         "torch==2.7.1",
         "torchvision==0.22.1",  # the photo model's image processor needs it
@@ -153,6 +153,32 @@ def _settle_project(sb, project_id: str):
     sb.table("projects").update({"status": "ready" if ok else "failed"}).eq("id", project_id).execute()
 
 
+def _append_card(video: bytes, card_png: bytes, w: int, h: int, seconds: float = 2.0) -> bytes:
+    """Add a still card to the end of a clip, keeping the clip's sound if it has any."""
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        src, card, out = f"{d}/in.mp4", f"{d}/card.png", f"{d}/out.mp4"
+        open(src, "wb").write(video)
+        open(card, "wb").write(card_png)
+        has_audio = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", src],
+            capture_output=True, text=True,
+        ).stdout.strip() != ""
+        vf = f"fps={FPS},scale={w}:{h},setsar=1,format=yuv420p"
+        cmd = ["ffmpeg", "-y", "-i", src, "-loop", "1", "-t", str(seconds), "-i", card]
+        if has_audio:
+            cmd += ["-f", "lavfi", "-t", str(seconds), "-i", "anullsrc=r=44100:cl=stereo",
+                    "-filter_complex", f"[0:v]{vf}[a0];[1:v]{vf}[a1];[0:a]aresample=44100,aformat=channel_layouts=stereo[s0];"
+                    "[a0][s0][a1][2:a]concat=n=2:v=1:a=1[v][a]", "-map", "[v]", "-map", "[a]", "-c:a", "aac"]
+        else:
+            cmd += ["-filter_complex", f"[0:v]{vf}[a0];[1:v]{vf}[a1];[a0][a1]concat=n=2:v=1:a=0[v]", "-map", "[v]"]
+        cmd += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return open(out, "rb").read()
+
+
 # --------------------------------------------------------------------------- script
 
 
@@ -162,16 +188,37 @@ class ScriptWriter:
     @modal.enter()
     def load(self):
         import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer
+        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-        self.tok = AutoTokenizer.from_pretrained(LLM_ID)
-        self.model = AutoModelForCausalLM.from_pretrained(
+        # Keep photos small so the model fits on a 24 GB GPU.
+        self.proc = AutoProcessor.from_pretrained(LLM_ID, min_pixels=256 * 28 * 28, max_pixels=640 * 28 * 28)
+        self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             LLM_ID, torch_dtype=torch.bfloat16, device_map="cuda"
         )
         models.commit()
 
+    def _chat(self, system: str, user: str, image=None, max_new_tokens: int = 1600, temperature: float = 0.8) -> str:
+        content = ([{"type": "image"}] if image is not None else []) + [{"type": "text", "text": user}]
+        msgs = [{"role": "system", "content": [{"type": "text", "text": system}]},
+                {"role": "user", "content": content}]
+        text = self.proc.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
+        batch = self.proc(text=[text], images=[image] if image is not None else None, return_tensors="pt").to("cuda")
+        out = self.model.generate(**batch, max_new_tokens=max_new_tokens, temperature=temperature,
+                                  top_p=0.9, do_sample=True)
+        return self.proc.batch_decode(out[:, batch["input_ids"].shape[1]:], skip_special_tokens=True)[0]
+
+    def _describe(self, image) -> str:
+        """Say exactly what the product in the customer's photo is, so nothing gets invented."""
+        return self._chat(
+            "You describe product photos for ad scripts. Be literal and specific.",
+            "What exactly is the product in this photo? In 2-3 sentences give: what it is (and how many "
+            "pieces if it is a set), its colors, prints or patterns, materials, and any text or brand on it. "
+            "Do not guess anything you cannot see.",
+            image=image, max_new_tokens=200, temperature=0.2,
+        ).strip()
+
     def _write(self, title: str, offer: str, idea: str, subject: str, n: int, talk: bool = False,
-               product_name: str = "") -> dict:
+               product_name: str = "", product_desc: str = "") -> dict:
         system = (
             "You are an award-winning commercial director writing shot prompts for the Wan 2.2 "
             "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
@@ -243,7 +290,12 @@ class ScriptWriter:
         name_line = (f'Product name: "{product_name}" (if this looks like a file name such as IMG_1234 or '
                      '"Product from amazon.com", it is not a real name: call it "this" instead).'
                      if product_name else "")
+        desc_line = (f"THE PRODUCT (from the customer's actual photo): {product_desc} Every prompt, line, "
+                     "caption and first_frame must describe exactly this product with these colors and details. "
+                     "Never call it anything else and never invent a different product."
+                     if product_desc else "")
         user = f"""Project: "{title}". Business / offer: "{offer or title}".
+{desc_line}
 Customer's idea for the video: "{idea or 'not given; choose a strong, scroll-stopping concept for this offer'}".
 {photo_rule}
 {talk_rule}
@@ -258,10 +310,7 @@ For each scene give:
 Also give "hook" (max 8 words) and "cta" (max 6 words): a call to action that names the product
 when a real name is known, e.g. "Shop the {{product}} now" or "Tap the link to get yours".
 JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "line": str (when asked), "first_frame": str (scene 1 only, when asked)}}]}}"""
-        msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-        ids = self.tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt").to("cuda")
-        out = self.model.generate(ids, max_new_tokens=1600, temperature=0.8, top_p=0.9, do_sample=True)
-        text = self.tok.decode(out[0][ids.shape[1]:], skip_special_tokens=True)
+        text = self._chat(system, user)
         match = re.search(r"\{.*\}", text, re.S)
         data = json.loads(match.group(0) if match else text)
         scenes = [s for s in data.get("scenes", []) if s.get("prompt")][:n]
@@ -299,8 +348,19 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                 model_shot = bool(inp.get("model_shot")) and bool(first_image)
                 subject = ("product_model" if model_shot else "product") if first_image else "none"
             voice = inp.get("voice") or None
+            product_desc = ""
+            if product:
+                try:
+                    from PIL import Image
+
+                    img = Image.open(io.BytesIO(sb.storage.from_("media").download(product))).convert("RGB")
+                    product_desc = self._describe(img)
+                except Exception as de:  # noqa: BLE001
+                    print(f"could not describe the product photo: {de!r}", flush=True)
             script = self._write(project["title"], project.get("offer_description") or "", idea, subject, n,
-                                 talk=bool(voice), product_name=(inp.get("product_name") or "").strip()[:120])
+                                 talk=bool(voice), product_name=(inp.get("product_name") or "").strip()[:120],
+                                 product_desc=product_desc)
+            script["product"] = product_desc
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.
@@ -321,6 +381,9 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                         "model_shot": (scene.get("first_frame") or None) if (i == 0 and model_shot) else None,
                         "line": (scene.get("line") or "").strip() if voice else "",
                         "voice": voice,
+                        # The last scene ends on the customer's real product photo with the call to action.
+                        "end_card": product if (product and i == len(script["scenes"]) - 1) else None,
+                        "end_text": (script.get("cta") or scene.get("caption") or "").strip()[:60],
                     },
                 }
                 res = sb.table("generation_jobs").upsert(
@@ -440,6 +503,33 @@ class VideoGenerator:
         bg.paste(fg, ((w - fg.width) // 2, (h - fg.height) // 2))
         return bg
 
+    @classmethod
+    def _end_card(cls, raw: bytes, text: str, w: int, h: int) -> bytes:
+        """The customer's real product photo, fitted to the frame, with the call to action on it."""
+        from PIL import Image, ImageDraw, ImageFont
+
+        img = cls._fit(Image.open(io.BytesIO(raw)), w, h).convert("RGB")
+        if text:
+            draw = ImageDraw.Draw(img)
+            size = max(28, w // 14)
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+            words, lines = text.split(), [""]
+            for word in words:  # wrap to the frame width
+                trial = (lines[-1] + " " + word).strip()
+                if draw.textlength(trial, font=font) > w * 0.86 and lines[-1]:
+                    lines.append(word)
+                else:
+                    lines[-1] = trial
+            box_h = len(lines) * int(size * 1.3) + size
+            top = h - box_h - h // 12
+            draw.rounded_rectangle([w * 0.04, top, w * 0.96, top + box_h], radius=size // 2, fill=(0, 0, 0))
+            for k, line in enumerate(lines):
+                tw = draw.textlength(line, font=font)
+                draw.text(((w - tw) / 2, top + size // 2 + k * int(size * 1.3)), line, font=font, fill=(255, 215, 0))
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue()
+
     @modal.method()
     def run(self, job_id: str):
         import tempfile
@@ -526,6 +616,15 @@ class VideoGenerator:
                 except Exception as te:  # noqa: BLE001
                     print(f"voice step failed, keeping silent clip: {te!r}", flush=True)
                     voice_mode = "failed"
+
+            if inp.get("end_card"):
+                _stage(sb, job_id, "adding the product end card", t0)
+                try:
+                    card = self._end_card(sb.storage.from_("media").download(inp["end_card"]),
+                                          inp.get("end_text") or "", w, h)
+                    data = _append_card(data, card, w, h)
+                except Exception as ce:  # noqa: BLE001
+                    print(f"end card failed, keeping the clip without it: {ce!r}", flush=True)
 
             path = f"{job['owner_id']}/{project_id}/generated/{job_id}.mp4"
             sb.storage.from_("media").upload(path, data, {"content-type": "video/mp4", "upsert": "true"})
