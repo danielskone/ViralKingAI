@@ -4,6 +4,7 @@ import Composer from "@/components/Composer";
 import { createClient, getSessionUser } from "@/lib/supabase/server";
 import { isVideo, needsThumb, withUrls } from "@/lib/library";
 import ThumbBackfill from "@/components/ThumbBackfill";
+import WelcomeCard from "@/components/WelcomeCard";
 import { Crown, Film } from "@/components/icons";
 
 const STATUS: Record<string, string> = { draft: "Draft", generating: "Generating", ready: "Ready", failed: "Failed" };
@@ -34,6 +35,7 @@ export default async function Dashboard() {
       <div className="relative">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(60%_60%_at_50%_0%,rgba(212,175,55,0.18),transparent_70%)]" />
         <section className="relative mx-auto max-w-3xl px-4 pb-10 pt-14 text-center sm:pt-20">
+          <WelcomeCard />
           <div className="mx-auto mb-5 flex w-fit items-center gap-2 rounded-full border border-gold/30 bg-gold/5 px-3 py-1 text-xs text-gold-light">
             <Crown className="h-4 w-4" /> Your own AI video studio
           </div>

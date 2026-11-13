@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
-import { Box, Brand, Folder, Home, Media, Plus, User } from "@/components/icons";
+import { Box, Brand, Folder, Home, Media, Plus, Sparkle, User } from "@/components/icons";
 
 type Project = { id: string; title: string };
 
@@ -16,6 +16,7 @@ export default function SidebarNav({ projects }: { projects: Project[] }) {
     <nav className="flex flex-1 flex-col gap-1 overflow-y-auto text-sm">
       <Link href="/dashboard" className={"nav-item" + on("/dashboard")}><Home /> Create</Link>
       <Link href="/media" className={"nav-item" + on("/media")}><Media /> All media</Link>
+      <Link href="/tutorial" className={"nav-item" + on("/tutorial")}><Sparkle /> Tutorial</Link>
 
       <p className="eyebrow mt-6 mb-1 px-3">Assets</p>
       <Link href="/brand" className={"nav-item" + on("/brand")}><Brand /> Brand kit</Link>
