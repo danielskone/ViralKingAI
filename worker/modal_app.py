@@ -824,6 +824,63 @@ def make_scene(job_id: str):
 # --------------------------------------------------------------------------- talking avatar
 
 
+class _NoFace:
+    """Marks a frame where no face was found: it keeps its original pixels on output."""
+
+
+def _tolerate_missing_faces(pipeline_cls):
+    """LatentSync gives up on the whole clip if ANY frame has no face (a turn of the head,
+    a hand or the product in front of it). Instead: borrow the nearest frame's face for the
+    model's input, and leave those frames untouched in the output. Only clips where the
+    face is missing most of the time still fall back to a voice-over."""
+    import torch
+
+    def affine_transform_video(self, video_frames):
+        found = []
+        for frame in video_frames:
+            try:
+                found.append(self.image_processor.affine_transform(frame))
+            except RuntimeError as e:
+                if "Face not detected" not in str(e):
+                    raise
+                found.append(None)
+        good = [i for i, r in enumerate(found) if r is not None]
+        if len(good) < 0.4 * len(found):
+            raise RuntimeError("Face not detected")
+        faces, boxes, matrices = [], [], []
+        for i, r in enumerate(found):
+            if r is None:
+                face, box, _ = found[min(good, key=lambda g: abs(g - i))]
+                faces.append(face)
+                boxes.append(box)
+                matrices.append(_NoFace())
+            else:
+                faces.append(r[0])
+                boxes.append(r[1])
+                matrices.append(r[2])
+        print(f"lip sync: face found in {len(good)}/{len(found)} frames", flush=True)
+        return torch.stack(faces), boxes, matrices
+
+    original_restore = pipeline_cls.restore_video
+
+    def restore_video(self, faces, video_frames, boxes, affine_matrices):
+        import numpy as np
+
+        keep = [i for i, m in enumerate(affine_matrices[: len(faces)]) if isinstance(m, _NoFace)]
+        if not keep:
+            return original_restore(self, faces, video_frames, boxes, affine_matrices)
+        # Restore only the frames that had a face, then put the untouched ones back in place.
+        idx = [i for i in range(len(faces)) if i not in set(keep)]
+        done = original_restore(self, faces[idx], video_frames[idx], [boxes[i] for i in idx],
+                                [affine_matrices[i] for i in idx])
+        out = np.array(video_frames[: len(faces)], copy=True)
+        out[idx] = done
+        return out
+
+    pipeline_cls.affine_transform_video = affine_transform_video
+    pipeline_cls.restore_video = restore_video
+
+
 # Lip sync fits in 24 GB, so it runs on mid-range GPUs only (never the pricey A100/H100),
 # and the GPU shuts off 20 s after the last line instead of idling for a minute.
 @app.cls(gpu=["L40S", "A10G", "L4"], image=talk_image, volumes={MODELS_DIR: models},
@@ -868,6 +925,7 @@ class Talker:
         unet, _ = UNet3DConditionModel.from_pretrained(
             OmegaConf.to_container(self.config.model), "checkpoints/latentsync_unet.pt", device="cpu"
         )
+        _tolerate_missing_faces(LipsyncPipeline)
         self.lipsync = LipsyncPipeline(
             vae=vae, audio_encoder=audio_encoder, unet=unet.to(dtype=self.dtype),
             scheduler=DDIMScheduler.from_pretrained("configs"),
