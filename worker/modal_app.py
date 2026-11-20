@@ -126,7 +126,7 @@ ltx_image = (
     .env({"HF_HOME": MODELS_DIR, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
 )
 # The photo model runs on the newer libraries too (QwenImageEditPlusPipeline, LoRA loading).
-edit_image = ltx_image.pip_install("peft", "supabase==2.22.4")
+edit_image = ltx_image.pip_install("torchvision==0.24.1", "peft", "supabase==2.22.4")
 VOICE_STYLE = {  # Kokoro voice id -> how LTX should make the voice sound
     "a": "a bright, upbeat, natural young American",
     "b": "a warm, natural British",
