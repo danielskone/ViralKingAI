@@ -448,12 +448,13 @@ class ScriptWriter:
             who = ("the person from the customer's avatar photo" if subject == "product_avatar"
                    else "a fitting, attractive person")
             photo_rule = (
-                "The customer uploaded a product photo. For scene 1 ALSO write \"first_frame\": a "
-                f"40-70 word image-editing instruction for a photorealistic photo of {who} wearing or "
-                "using this exact product (keep its color, print, logo and details exactly the same), "
+                "The customer uploaded a product photo. For scene 1 ALSO write \"first_frame\": your own "
+                f"40-70 word image-editing instruction (start it with \"Make a photo of\") for a photorealistic "
+                f"photo of {who} holding or using this exact product (keep its color, print, logo and details "
+                "exactly the same; never put a face or a photo of a person on the product), "
                 "styled like a frame from a real TikTok UGC video: a casual phone photo at home in the room that suits the product, "
                 "soft window daylight, the person facing the camera with an excited expression and "
-                "holding the product up beside their face (or wearing it), product label facing the camera, framed from the "
+                "holding the product up beside their face (or wearing it if it is clothing or jewelry), the front of the product facing the camera, framed from the "
                 "waist up so the face is large and clear. Scene 1's \"prompt\" then describes that same person and setting and the "
                 "motion that follows."
             ) + (" EVERY scene starts from that same photo, so every prompt describes the same person, outfit, "
@@ -485,7 +486,7 @@ class ScriptWriter:
             f"The LAST scene's line is the personal verdict plus a soft, natural call to action for {thing}, "
             "said like a friend, not a salesperson, e.g. \"Honestly, I'm not going back, link's right below.\" "
             "or \"I literally take it everywhere now, the link's down there if you want one.\" "
-            "With only 1 scene, that one line is the hook plus the soft call to action."
+            "With only 1 scene, that one line (still 10-14 words) is a quick personal hook plus the soft call to action."
             if sells else
             "The LAST scene's line is a personal verdict that ends with a soft call to action (follow or comment)."
         )
@@ -564,13 +565,41 @@ For each scene give:
 - "caption": on-screen text for that scene, max 8 words.
 Also give "hook" (max 8 words) and "cta" (max 6 words): an urgent call to action that names the product
 when a real name is known, e.g. "Get yours before they're gone" or "Tap the link, grab yours".
-JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "line": str (when asked), "first_frame": str (scene 1 only, when asked)}}]}}"""
-        text = self._chat(system, user)
-        match = re.search(r"\{.*\}", text, re.S)
-        data = json.loads(match.group(0) if match else text)
-        scenes = [s for s in data.get("scenes", []) if s.get("prompt")][:n]
+JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "line": str (10-14 spoken words, when asked), "first_frame": str (scene 1 only, when asked)}}]}}"""
+        scenes, data = [], {}
+        for attempt in range(3):
+            # The writer sometimes returns a 2-word line ("Shop now!"), which leaves seconds of silence
+            # the video model fills with mumbling and made-up on-screen text, or copies our instructions
+            # into first_frame. Ask again when that happens.
+            try:
+                text = self._chat(system, user, temperature=0.8 if attempt == 0 else 0.6)
+                match = re.search(r"\{.*\}", text, re.S)
+                data = json.loads(match.group(0) if match else text)
+            except Exception as pe:  # noqa: BLE001
+                print(f"script reply was not JSON (try {attempt + 1}): {pe!r}", flush=True)
+                continue
+            scenes = [s for s in data.get("scenes", []) if s.get("prompt")][:n]
+            short = talk and any(len((s.get("line") or "").split()) < 8 for s in scenes)
+            echoed = any(_echoed(s.get("first_frame")) for s in scenes)
+            if scenes and not short and not echoed:
+                break
+            print(f"script try {attempt + 1} not usable (short line={short}, echoed={echoed})", flush=True)
         if not scenes:
             raise ValueError("Script model returned no scenes")
+        for s in scenes:
+            if _echoed(s.get("first_frame")):
+                s["first_frame"] = (
+                    "Make a photorealistic photo of the person holding this exact product up beside their face, "
+                    "the front of the product facing the camera, keeping its colors, prints and details exactly "
+                    "the same. A casual iPhone photo at home, soft window daylight, an excited smile, framed from "
+                    "the waist up so the face is large and clear. Never put a face on the product.")
+        if talk:
+            for i, s in enumerate(scenes):
+                if len((s.get("line") or "").split()) < 8:
+                    # Last resort: a natural line in the reference style, so the voice fills the shot.
+                    last = i == len(scenes) - 1
+                    s["line"] = ("Okay, I honestly can't stop using these, they're even better in person."
+                                 if not last else "Honestly, I'm obsessed with these, they're even better in person.")
         cta = (data.get("cta") or "").strip()
         if talk and cta_line:
             # The customer picked the exact call to action: make sure it ends the video word for word.
@@ -920,6 +949,12 @@ def _queue_scenes(sb, rows: list[dict]):
             make_scene.spawn(res.data[0]["id"])
 
 
+def _echoed(first_frame) -> bool:
+    """True when the writer copied our instruction text instead of writing its own."""
+    t = (first_frame or "").lower()
+    return "word image-editing instruction" in t or "40-70 word" in t
+
+
 def _photo_request(sb, product_path: str, avatar_path: str | None, instruction: str, w: int, h: int):
     """The image and instruction for the 'person holding the product' photo."""
     from PIL import Image
@@ -937,7 +972,8 @@ def _photo_request(sb, product_path: str, avatar_path: str | None, instruction: 
         instruction = (
             "The left half shows a person and the right half shows a product. Create ONE "
             "single full-frame photo (no split screen, no collage) of that same person, "
-            "same face and hair, wearing or using that exact product. " + instruction
+            "same face and hair, holding or using that exact product. The person's face appears only "
+            "once, on the person: never put a face, photo or person on the product. " + instruction
         )
     buf = io.BytesIO()
     image.save(buf, "PNG")
