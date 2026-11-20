@@ -566,6 +566,7 @@ For each scene give:
 Also give "hook" (max 8 words) and "cta" (max 6 words): an urgent call to action that names the product
 when a real name is known, e.g. "Get yours before they're gone" or "Tap the link, grab yours".
 JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": str, "line": str (10-14 spoken words, when asked), "first_frame": str (scene 1 only, when asked)}}]}}"""
+        needs_frame = subject in ("product_model", "product_avatar")
         scenes, data = [], {}
         for attempt in range(3):
             # The writer sometimes returns a 2-word line ("Shop now!"), which leaves seconds of silence
@@ -581,18 +582,24 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
             scenes = [s for s in data.get("scenes", []) if s.get("prompt")][:n]
             short = talk and any(len((s.get("line") or "").split()) < 8 for s in scenes)
             echoed = any(_echoed(s.get("first_frame")) for s in scenes)
-            if scenes and not short and not echoed:
+            # Without first_frame there is no "person holding the product" photo, and the scene
+            # would start from the bare product photo instead.
+            missing = needs_frame and bool(scenes) and not (scenes[0].get("first_frame") or "").strip()
+            if scenes and not short and not echoed and not missing:
                 break
-            print(f"script try {attempt + 1} not usable (short line={short}, echoed={echoed})", flush=True)
+            print(f"script try {attempt + 1} not usable (short line={short}, echoed={echoed}, "
+                  f"no first_frame={missing})", flush=True)
         if not scenes:
             raise ValueError("Script model returned no scenes")
-        for s in scenes:
-            if _echoed(s.get("first_frame")):
-                s["first_frame"] = (
-                    "Make a photorealistic photo of the person holding this exact product up beside their face, "
-                    "the front of the product facing the camera, keeping its colors, prints and details exactly "
-                    "the same. A casual iPhone photo at home, soft window daylight, an excited smile, framed from "
-                    "the waist up so the face is large and clear. Never put a face on the product.")
+        if needs_frame and (_echoed(scenes[0].get("first_frame"))
+                            or not (scenes[0].get("first_frame") or "").strip()):
+            scenes[0]["first_frame"] = (
+                "Make a photorealistic photo of the person holding this exact product up beside their face, "
+                "the front of the product facing the camera, keeping its colors, prints and details exactly "
+                "the same. A casual iPhone photo at home, soft window daylight, an excited smile, framed from "
+                "the waist up so the face is large and clear. Never put a face on the product.")
+        for s in scenes[1:]:
+            s.pop("first_frame", None)
         if talk:
             for i, s in enumerate(scenes):
                 if len((s.get("line") or "").split()) < 8:
