@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createAndGenerate } from "@/app/actions";
 import { uploadToLibrary } from "@/components/LibraryUpload";
 import ProductLink from "@/components/ProductLink";
+import { CTA_OPTIONS, DEFAULT_CTA } from "@/lib/cta";
 import { Arrow, Box, Check, ChevronDown, Layers, Mic, Play, Plus, Ratio, Sparkle, User } from "@/components/icons";
 
 type Item = { id: string; url?: string; thumb?: string; file_name: string | null };
@@ -271,6 +272,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
   const [scenes, setScenes] = useState(3);
   const [modelShot, setModelShot] = useState(true);
   const [voice, setVoice] = useState("af_heart");
+  const [cta, setCta] = useState(DEFAULT_CTA);
   const [pending, setPending] = useState(false);
   const [autoN, setAutoN] = useState(0);
   const ideas = AUTO[product && avatar ? "both" : product ? "product" : avatar ? "avatar" : "none"];
@@ -287,6 +289,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
       <input type="hidden" name="scene_count" value={scenes} />
       <input type="hidden" name="model_shot" value={product && modelShot ? "on" : ""} />
       <input type="hidden" name="voice" value={voice} />
+      <input type="hidden" name="cta" value={cta} />
       <textarea
         name="idea"
         value={idea}
@@ -303,6 +306,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
         <Dropdown icon={<Ratio className="h-4 w-4" />} label="Format" options={FORMATS} value={aspect} onChange={setAspect} />
         <Dropdown icon={<Layers className="h-4 w-4" />} label="Scenes" options={SCENES} value={scenes} onChange={setScenes} />
         <Dropdown icon={<Mic className="h-4 w-4" />} label="Voice" options={VOICE_OPTS} value={voice} onChange={setVoice} />
+        {voice && <Dropdown icon={<Sparkle className="h-4 w-4" />} label="Call to action" options={CTA_OPTIONS} value={cta} onChange={setCta} />}
         {product && !avatar && (
           <button type="button" onClick={() => setModelShot(!modelShot)} className={"chip" + (modelShot ? " chip-on" : "")}>
             <Sparkle className="h-4 w-4" /> On a model

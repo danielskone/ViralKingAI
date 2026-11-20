@@ -9,8 +9,9 @@ import { isVideo, withUrls } from "@/lib/library";
 import { deleteAsset, deleteProject, startGeneration } from "@/app/actions";
 import { Arrow, Box, Film, Trash, User } from "@/components/icons";
 import DeleteButton from "@/components/DeleteButton";
+import { CTA_OPTIONS, DEFAULT_CTA } from "@/lib/cta";
 
-type ScriptIn = { idea?: string; scene_count?: number; model_shot?: boolean; product_path?: string | null; avatar_path?: string | null; voice?: string | null };
+type ScriptIn = { idea?: string; scene_count?: number; model_shot?: boolean; product_path?: string | null; avatar_path?: string | null; voice?: string | null; cta_line?: string | null };
 
 export default async function ProjectPage({
   params,
@@ -54,6 +55,7 @@ export default async function ProjectPage({
   const lastCount = String(lastIn.scene_count ?? 3);
   const lastModelShot = lastIn.model_shot ?? true;
   const lastVoice = lastIn.voice ?? "";
+  const lastCta = lastIn.cta_line ?? DEFAULT_CTA;
   const script = (lastScript?.status === "succeeded" ? lastScript.output : undefined) as
     | { hook?: string; cta?: string; scenes?: { prompt: string; caption?: string }[] }
     | undefined;
@@ -165,6 +167,9 @@ export default async function ProjectPage({
                   <option value="am_fenrir">Man · deep</option>
                   <option value="bf_emma">Woman · British</option>
                   <option value="bm_george">Man · British</option>
+                </select>
+                <select key={"c" + lastCta} name="cta" defaultValue={lastCta} className="chip max-w-[14rem] appearance-none truncate pr-3" disabled={busy} aria-label="Call to action">
+                  {CTA_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <label className="chip cursor-pointer">
                   <input type="checkbox" name="model_shot" defaultChecked={lastModelShot} disabled={busy} key={String(lastModelShot)} className="accent-[#d4af37]" />
