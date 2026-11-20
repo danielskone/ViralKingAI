@@ -115,7 +115,8 @@ LTX_STEPS = 8
 LTX_TWO_STAGE = os.environ.get("LTX_TWO_STAGE", "1") == "1"
 # Final size of a talking clip per frame size the scene asks for (native 1080p when set).
 LTX_OUT = {(704, 1280): (704, 1280), (1280, 704): (1280, 704), (960, 960): (960, 960)}
-UPSAMPLER_REPOS = [(LTX_ID, "latent_upsampler"), ("diffusers/LTX-2.3-Diffusers", "latent_upsampler")]
+# Lightricks' own 2x spatial upscaler for LTX-2.3 (original checkpoint, loaded into diffusers' model).
+UPSAMPLER_REPO = "Lightricks/LTX-2.3"
 ltx_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
@@ -833,16 +834,10 @@ class VoiceVideo:
         # The small 2x latent upscaler for the two-stage render (stays on the GPU, ~1 GB).
         self.upsampler = None
         if LTX_TWO_STAGE:
-            from diffusers.models.latent_upscaler import LTX2LatentUpsamplerModel
-
-            for repo, sub in UPSAMPLER_REPOS:
-                try:
-                    self.upsampler = LTX2LatentUpsamplerModel.from_pretrained(
-                        repo, subfolder=sub, torch_dtype=torch.bfloat16).to("cuda").eval()
-                    print(f"latent upscaler: {repo}/{sub}", flush=True)
-                    break
-                except Exception as ue:  # noqa: BLE001
-                    print(f"latent upscaler not in {repo}: {ue!r}", flush=True)
+            try:
+                self.upsampler = _load_upsampler().to("cuda", torch.bfloat16).eval()
+            except Exception as ue:  # noqa: BLE001
+                print(f"latent upscaler not loaded, rendering in one pass: {ue!r}", flush=True)
 
     @modal.method()
     def render(self, prompt: str, w: int, h: int, image_png: bytes | None,
@@ -898,12 +893,43 @@ class VoiceVideo:
             torch.cuda.empty_cache()
 
 
+def _load_upsampler():
+    """LTX-2.3's 2x spatial latent upscaler from Lightricks' original checkpoint."""
+    from diffusers.models.latent_upscaler import LTX2LatentUpsamplerModel
+    from huggingface_hub import hf_hub_download, list_repo_files
+    from safetensors.torch import load_file
+
+    files = sorted(f for f in list_repo_files(UPSAMPLER_REPO)
+                   if "spatial-upscaler-x2" in f and f.endswith(".safetensors"))
+    if not files:
+        raise FileNotFoundError(f"no spatial upscaler in {UPSAMPLER_REPO}")
+    sd = load_file(hf_hub_download(UPSAMPLER_REPO, files[-1]))
+    for prefix in ("model.", "latent_upsampler.", "upsampler_model."):
+        if all(k.startswith(prefix) for k in sd):
+            sd = {k[len(prefix):]: v for k, v in sd.items()}
+    model = LTX2LatentUpsamplerModel()
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if missing:
+        raise ValueError(f"{files[-1]}: missing {missing[:5]}, unexpected {unexpected[:5]}")
+    print(f"latent upscaler: {UPSAMPLER_REPO}/{files[-1]} (unused keys: {len(unexpected)})", flush=True)
+    return model
+
+
 @app.function(image=ltx_image, volumes={MODELS_DIR: models}, timeout=3600)
 def prefetch_ltx() -> str:
     from huggingface_hub import snapshot_download
 
     t = time.time()
     snapshot_download(LTX_ID)
+    try:
+        from huggingface_hub import hf_hub_download, list_repo_files
+
+        ups = sorted(f for f in list_repo_files(UPSAMPLER_REPO) if "spatial-upscaler-x2" in f)
+        print(f"{UPSAMPLER_REPO} upscaler files: {ups}", flush=True)
+        if ups:
+            hf_hub_download(UPSAMPLER_REPO, [f for f in ups if f.endswith(".safetensors")][-1])
+    except Exception as e:  # noqa: BLE001
+        print(f"upscaler prefetch failed: {e!r}", flush=True)
     models.commit()
     return f"{LTX_ID}: {time.time() - t:.0f}s"
 
@@ -1491,8 +1517,8 @@ def upgrade_smoke():
         "up beside her face toward the lens and talks with her other hand moving. Static camera, her face and "
         "the tumbler in sharp focus, realistic skin texture, authentic TikTok UGC look.",
         "Okay, I've been using this tumbler every day and it keeps my water cold all day.", "af_heart")
-    runs = [("one-pass 704x1280", False, (704, 1280)), ("two-stage 704x1280", True, (704, 1280)),
-            ("two-stage 1088x1920", True, (1088, 1920))]
+    runs = [("two-stage 704x1280", True, (704, 1280)), ("two-stage 1088x1920", True, (1088, 1920)),
+            ("one-pass 704x1280", False, (704, 1280))]
     vv = VoiceVideo()
     for name, two, size in runs:
         t = time.time()
@@ -1504,7 +1530,9 @@ def upgrade_smoke():
         info = _sheet.remote(clip)
         print(f"RESULT {name}: {time.time() - t:.0f}s, {info['size']}, {info['duration']:.2f}s, "
               f"mean {info['mean_db']} dB, {len(clip) // 1024} KB")
-        print(f"IMG {name.replace(' ', '_')} " + info["sheet_b64"])
+        sheet = info["sheet_b64"]
+        for i in range(0, len(sheet), 3000):
+            print(f"IMG {name.replace(' ', '_')} {i // 3000} {sheet[i:i + 3000]}", flush=True)
 
 
 VOICE_IDS = ["af_heart", "af_bella", "am_michael", "am_fenrir", "bf_emma", "bm_george"]
