@@ -1,0 +1,16 @@
+name: tmp start job
+on:
+  push:
+    branches: [tmp-start-job]
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install modal
+      - run: python -c "import modal; modal.Cls.from_name('viralking-ai','ScriptWriter')().run.spawn('ae08efec-4504-4d13-a5c6-51587f59d22a'); print('started')"
