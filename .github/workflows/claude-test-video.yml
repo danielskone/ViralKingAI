@@ -1,0 +1,16 @@
+name: Start one test video (temporary)
+on:
+  push:
+    branches: [claude-test-video]
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install modal==1.6.3
+      - run: python -c "import modal; modal.Cls.from_name('viralking-ai', 'ScriptWriter')().run.spawn('65a31149-6767-41bf-987c-740a040301b9'); print('started')"
