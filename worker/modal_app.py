@@ -149,8 +149,7 @@ def _voice_prompt(prompt: str, line: str, voice: str) -> str:
         f"{prompt.rstrip(' .')}{SHARP}. {pron} speaks directly to the camera the whole time in {style} {who}'s "
         f"voice, casual and excited like talking to a friend, saying: \"{line}\" {poss.capitalize()} lips, jaw "
         f"and face move naturally in sync with every word. The audio is only {poss} clear, close phone-microphone "
-        "voice in a quiet room, with no music and no other sounds. The picture is clean, with no subtitles, "
-        "captions or any text on screen."
+        "voice in a quiet room, with no music and no other sounds."
     )
 
 
@@ -841,7 +840,8 @@ class VoiceVideo:
 
     @modal.method()
     def render(self, prompt: str, w: int, h: int, image_png: bytes | None,
-               two_stage: bool | None = None, out_size: tuple | None = None) -> bytes:
+               two_stage: bool | None = None, out_size: tuple | None = None,
+               negative: str = "", guidance: float = 1.0) -> bytes:
         """One ~5 s clip with the person speaking, as mp4 bytes with sound."""
         import tempfile
 
@@ -859,7 +859,8 @@ class VoiceVideo:
                     if image_png else Image.new("RGB", (fw, fh), "white"))
 
         # Distilled settings: one pass per step, no extra guidance passes.
-        fast = dict(prompt=prompt, num_frames=NUM_FRAMES, frame_rate=float(FPS), guidance_scale=1.0,
+        fast = dict(prompt=prompt, num_frames=NUM_FRAMES, frame_rate=float(FPS), guidance_scale=guidance,
+                    negative_prompt=negative or None,
                     stg_scale=0.0, modality_scale=1.0, audio_guidance_scale=1.0, audio_stg_scale=0.0,
                     audio_modality_scale=1.0, return_dict=False)
         try:
@@ -907,7 +908,9 @@ def _load_upsampler():
     for prefix in ("model.", "latent_upsampler.", "upsampler_model."):
         if all(k.startswith(prefix) for k in sd):
             sd = {k[len(prefix):]: v for k, v in sd.items()}
-    model = LTX2LatentUpsamplerModel()
+    # 1.1 uses a plain conv + pixel-shuffle upsampler (not the rational resampler).
+    rational = any(k.startswith("upsampler.conv.") for k in sd)
+    model = LTX2LatentUpsamplerModel(use_rational_resampler=rational)
     missing, unexpected = model.load_state_dict(sd, strict=False)
     if missing:
         raise ValueError(f"{files[-1]}: missing {missing[:5]}, unexpected {unexpected[:5]}")
@@ -1517,13 +1520,15 @@ def upgrade_smoke():
         "up beside her face toward the lens and talks with her other hand moving. Static camera, her face and "
         "the tumbler in sharp focus, realistic skin texture, authentic TikTok UGC look.",
         "Okay, I've been using this tumbler every day and it keeps my water cold all day.", "af_heart")
-    runs = [("two-stage 704x1280", True, (704, 1280)), ("two-stage 1088x1920", True, (1088, 1920)),
-            ("one-pass 704x1280", False, (704, 1280))]
+    neg = "subtitles, captions, text, letters, words on screen, watermark, logo"
+    runs = [("two-stage 704x1280", True, (704, 1280), "", 1.0),
+            ("one-pass 704x1280", False, (704, 1280), "", 1.0),
+            ("one-pass 704x1280 neg", False, (704, 1280), neg, 2.0)]
     vv = VoiceVideo()
-    for name, two, size in runs:
+    for name, two, size, negative, guidance in runs:
         t = time.time()
         try:
-            clip = vv.render.remote(prompt, w, h, photo, two, size)
+            clip = vv.render.remote(prompt, w, h, photo, two, size, negative, guidance)
         except Exception as e:  # noqa: BLE001
             print(f"RESULT {name} FAILED after {time.time() - t:.0f}s: {e!r}")
             continue
