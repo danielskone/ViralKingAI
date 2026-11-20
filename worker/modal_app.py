@@ -136,7 +136,8 @@ def _voice_prompt(prompt: str, line: str, voice: str) -> str:
         f"{prompt.rstrip(' .')}{SHARP}. {pron} speaks directly to the camera the whole time in {style} {who}'s "
         f"voice, casual and excited like talking to a friend, saying: \"{line}\" {poss.capitalize()} lips, jaw "
         f"and face move naturally in sync with every word. The audio is only {poss} clear, close phone-microphone "
-        "voice in a quiet room, with no music and no other sounds."
+        "voice in a quiet room, with no music and no other sounds. The picture is clean, with no subtitles, "
+        "captions or any text on screen."
     )
 
 
@@ -450,12 +451,13 @@ class ScriptWriter:
                 "The customer uploaded a product photo. For scene 1 ALSO write \"first_frame\": a "
                 f"40-70 word image-editing instruction for a photorealistic photo of {who} wearing or "
                 "using this exact product (keep its color, print, logo and details exactly the same), "
-                "styled like a frame from a real TikTok UGC video: a casual phone photo at home in the room that suits the product "
-                "of the house, soft window daylight, the person facing the camera with an excited expression and "
-                "holding the product up beside their face (or wearing it), product label facing the camera. Scene 1's \"prompt\" then describes that same person and setting and the "
+                "styled like a frame from a real TikTok UGC video: a casual phone photo at home in the room that suits the product, "
+                "soft window daylight, the person facing the camera with an excited expression and "
+                "holding the product up beside their face (or wearing it), product label facing the camera, framed from the "
+                "waist up so the face is large and clear. Scene 1's \"prompt\" then describes that same person and setting and the "
                 "motion that follows."
-            ) + (" Scenes after scene 1 start from the plain avatar photo, so their prompts describe that "
-                 "person talking to the camera and do not show the product." if subject == "product_avatar" else "")
+            ) + (" EVERY scene starts from that same photo, so every prompt describes the same person, outfit, "
+                 "room and product, and only the action, expression and framing change from there.")
         elif subject == "avatar":
             photo_rule = (
                 "Scene 1 starts from the customer's photo of a person (their avatar). Its prompt must "
@@ -623,8 +625,9 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
             _finish(sb, job_id, output=script, gpu_seconds=round(time.time() - t0, 1))
 
             # Queue one video job per scene. The idempotency key stops duplicates on retry.
+            rows = []
             for i, scene in enumerate(script["scenes"]):
-                row = {
+                rows.append({
                     "owner_id": job["owner_id"],
                     "project_id": project_id,
                     "job_type": "video",
@@ -648,12 +651,13 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                                      else None),
                         "end_text": (script.get("cta") or scene.get("caption") or "").strip()[:60],
                     },
-                }
-                res = sb.table("generation_jobs").upsert(
-                    row, on_conflict="idempotency_key", ignore_duplicates=True
-                ).execute()
-                if res.data:
-                    make_scene.spawn(res.data[0]["id"])
+                })
+            if rows and rows[0]["input"].get("model_shot") and len(rows) > 1:
+                # Make the product-in-hand photo once and start EVERY scene from it, so the
+                # same person holds the same product in every scene (on a cheap CPU container).
+                start_scenes.spawn(rows)
+            else:
+                _queue_scenes(sb, rows)
         except Exception as e:  # noqa: BLE001
             _finish(sb, job_id, error=e, gpu_seconds=round(time.time() - t0, 1))
             _settle_project(sb, project_id)
@@ -883,6 +887,62 @@ def _end_card(raw: bytes, text: str, w: int, h: int) -> bytes:
 
 
 
+def _queue_scenes(sb, rows: list[dict]):
+    for row in rows:
+        res = sb.table("generation_jobs").upsert(row, on_conflict="idempotency_key", ignore_duplicates=True).execute()
+        if res.data:
+            make_scene.spawn(res.data[0]["id"])
+
+
+def _photo_request(sb, product_path: str, avatar_path: str | None, instruction: str, w: int, h: int):
+    """The image and instruction for the 'person holding the product' photo."""
+    from PIL import Image
+
+    raw = sb.storage.from_("media").download(product_path)
+    image = _fit(Image.open(io.BytesIO(raw)), w, h)
+    if avatar_path:
+        # Avatar on the left, product on the right; ask for one merged photo.
+        face = Image.open(io.BytesIO(sb.storage.from_("media").download(avatar_path)))
+        half = w // 2
+        board = Image.new("RGB", (w, h), "white")
+        board.paste(_fit(face, half, h), (0, 0))
+        board.paste(_fit(Image.open(io.BytesIO(raw)), w - half, h), (half, 0))
+        image = board
+        instruction = (
+            "The left half shows a person and the right half shows a product. Create ONE "
+            "single full-frame photo (no split screen, no collage) of that same person, "
+            "same face and hair, wearing or using that exact product. " + instruction
+        )
+    buf = io.BytesIO()
+    image.save(buf, "PNG")
+    return buf.getvalue(), instruction
+
+
+@app.function(image=gpu_image, secrets=secrets, timeout=1800)
+def start_scenes(rows: list[dict]):
+    """Makes one shared product-in-hand photo, points every scene at it, then queues the scenes.
+    If the photo fails, the scenes are queued the old way (scene 1 makes its own photo)."""
+    sb = _sb()
+    first = rows[0]["input"]
+    try:
+        w, h = SIZES.get(first.get("aspect_ratio", "9:16"), SIZES["9:16"])
+        png, instruction = _photo_request(sb, first["image_path"], first.get("avatar_path"),
+                                          first["model_shot"], w, h)
+        call = ImageEditor().edit.spawn(png, instruction, "", 0.0)
+        try:
+            edited = call.get(timeout=1200)
+        except BaseException:
+            call.cancel()
+            raise
+        frame_path = f"{rows[0]['owner_id']}/{rows[0]['project_id']}/generated/{first['script_job_id']}-frame.png"
+        sb.storage.from_("media").upload(frame_path, edited, {"content-type": "image/png", "upsert": "true"})
+        for row in rows:
+            row["input"].update(image_path=frame_path, model_shot=None, avatar_path=None)
+    except Exception as e:  # noqa: BLE001
+        print(f"shared model photo failed, scenes make their own: {e!r}", flush=True)
+    _queue_scenes(sb, rows)
+
+
 @app.function(image=gpu_image, secrets=secrets, timeout=VIDEO_TIMEOUT)
 def make_scene(job_id: str):
     """Directs one scene on a cheap CPU container: model photo, animation and voice each
@@ -904,26 +964,12 @@ def make_scene(job_id: str):
             image = _fit(Image.open(io.BytesIO(raw)), w, h)
             if inp.get("model_shot"):
                 # Put the product on a person first, then animate that photo.
-                instruction = inp["model_shot"]
-                if inp.get("avatar_path"):
-                    # Avatar on the left, product on the right; ask for one merged photo.
-                    face = Image.open(io.BytesIO(sb.storage.from_("media").download(inp["avatar_path"])))
-                    half = w // 2
-                    board = Image.new("RGB", (w, h), "white")
-                    board.paste(_fit(face, half, h), (0, 0))
-                    board.paste(_fit(Image.open(io.BytesIO(raw)), w - half, h), (half, 0))
-                    image = board
-                    instruction = (
-                        "The left half shows a person and the right half shows a product. Create ONE "
-                        "single full-frame photo (no split screen, no collage) of that same person, "
-                        "same face and hair, wearing or using that exact product. " + instruction
-                    )
-                buf = io.BytesIO()
-                image.save(buf, "PNG")
+                photo_png, instruction = _photo_request(sb, inp["image_path"], inp.get("avatar_path"),
+                                                        inp["model_shot"], w, h)
                 _stage(sb, job_id, "making the model photo", t0)
                 try:
                     # Bounded so the animation and voice still fit in this job's time.
-                    call = ImageEditor().edit.spawn(buf.getvalue(), instruction, job_id, t0)
+                    call = ImageEditor().edit.spawn(photo_png, instruction, job_id, t0)
                     try:
                         edited = call.get(timeout=1200)
                     except BaseException:
