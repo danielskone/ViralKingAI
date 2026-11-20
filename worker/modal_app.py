@@ -127,6 +127,11 @@ def _voice_prompt(prompt: str, line: str, voice: str) -> str:
     who, pron, poss = ("man", "He", "his") if male else ("woman", "She", "her")
     style = VOICE_STYLE.get(voice[:1], VOICE_STYLE["a"])
     line = line.strip().replace('"', "'")
+    # Drop any sentence in the shot prompt that has its own spoken words, so only the line is said.
+    clean = re.sub(r"[\"“][^\"”]*[\"”]", "", prompt)
+    clean = re.sub(r"\b(says?|saying|said)\b([^.'\"]*?)'[^']*'", r"\1", clean)
+    keep = [x for x in re.split(r"(?<=[.!?])\s+", clean.strip()) if not re.search(r"\b(says?|saying|said)\b", x)]
+    prompt = " ".join(keep) or prompt
     return (
         f"{prompt.rstrip(' .')}{SHARP}. {pron} speaks directly to the camera the whole time in {style} {who}'s "
         f"voice, casual and excited like talking to a friend, saying: \"{line}\" {poss.capitalize()} lips, jaw "
@@ -375,8 +380,17 @@ class ScriptWriter:
             image=image, max_new_tokens=200, temperature=0.2,
         ).strip()
 
+    def _describe_person(self, image) -> str:
+        """One sentence on how the avatar looks, so every prompt shows the real person."""
+        return self._chat(
+            "You describe people in photos for video prompts. Be literal and specific.",
+            "Describe the main person in this photo in one sentence: apparent gender, age group, skin tone, "
+            "hair color, length and style, and clothing. Do not guess ethnicity or anything you cannot see.",
+            image=image, max_new_tokens=120, temperature=0.2,
+        ).strip()
+
     def _write(self, title: str, offer: str, idea: str, subject: str, n: int, talk: bool = False,
-               product_name: str = "", product_desc: str = "") -> dict:
+               product_name: str = "", product_desc: str = "", person_desc: str = "") -> dict:
         ugc = subject != "product"  # a person is on screen: use the UGC creator style
         if ugc:
             # Learned from Daniel's 4 reference UGC videos (skin oil, tumbler, blender, handbag):
@@ -509,8 +523,14 @@ class ScriptWriter:
                      "caption and first_frame must describe exactly this product with these colors and details. "
                      "Never call it anything else and never invent a different product."
                      if product_desc else "")
+        person_line = (f"THE PERSON (from the customer's avatar photo): {person_desc} Every prompt and first_frame "
+                       "must describe exactly this person (same skin tone, hair and look). The example's person, "
+                       "product and room are only an illustration: never copy them."
+                       if person_desc else
+                       "The example's person, product and room are only an illustration: never copy them.")
         user = f"""Project: "{title}". Business / offer: "{offer or title}".
 {desc_line}
+{person_line}
 Customer's idea for the video: "{idea or 'not given; choose a strong, scroll-stopping concept for this offer'}".
 {photo_rule}
 {recipe}{talk_rule}
@@ -520,7 +540,8 @@ Write {n} scene(s) for a short social media ad that follows the customer's idea 
 the last scene shows the product clearly (in hand, worn, or as the hero of the shot) so the call to
 action lands, and its caption is the call to action.
 For each scene give:
-- "prompt": 70-110 words that repeat the setting and the person's look in every scene, in the style of this example: "{example}"
+- "prompt": 70-110 words that repeat the setting and the person's look in every scene, with NO spoken words
+  or quotes in it (what they say goes only in "line"), in the style of this example: "{example}"
 - "caption": on-screen text for that scene, max 8 words.
 Also give "hook" (max 8 words) and "cta" (max 6 words): an urgent call to action that names the product
 when a real name is known, e.g. "Get yours before they're gone" or "Tap the link, grab yours".
@@ -580,9 +601,18 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                     product_desc = self._describe(img)
                 except Exception as de:  # noqa: BLE001
                     print(f"could not describe the product photo: {de!r}", flush=True)
+            person_desc = ""
+            if avatar:
+                try:
+                    from PIL import Image
+
+                    face = Image.open(io.BytesIO(sb.storage.from_("media").download(avatar))).convert("RGB")
+                    person_desc = self._describe_person(face)
+                except Exception as pe:  # noqa: BLE001
+                    print(f"could not describe the avatar photo: {pe!r}", flush=True)
             script = self._write(project["title"], project.get("offer_description") or "", idea, subject, n,
                                  talk=bool(voice), product_name=(inp.get("product_name") or "").strip()[:120],
-                                 product_desc=product_desc)
+                                 product_desc=product_desc, person_desc=person_desc)
             script["product"] = product_desc
             exact = _exact_lines(idea, len(script["scenes"])) if voice else None
             if exact:
