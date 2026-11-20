@@ -8,7 +8,7 @@ app = m.app
 PROJECTS = ["48f136ab-22eb-41c0-8a94-beefaad95189", "5a9b7064-8a48-4e4e-b96e-70570d3c29d6"]
 
 
-@app.function(image=m.gpu_image, secrets=[m.modal.Secret.from_name("viralking-secrets")], timeout=900)
+@app.function(image=m.gpu_image.add_local_python_source("modal_app"), secrets=[m.modal.Secret.from_name("viralking-secrets")], timeout=900)
 def join(pid: str) -> str:
     sb = m._sb()
     m._settle_project(sb, pid)
