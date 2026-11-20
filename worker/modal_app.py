@@ -37,7 +37,25 @@ MODELS_DIR = "/models"
 # Wan 2.2 TI2V-5B native resolution is 1280x704 (or 704x1280), 24 fps.
 SIZES = {"9:16": (704, 1280), "16:9": (1280, 704), "1:1": (960, 960)}
 FPS = 24
-NUM_FRAMES = 121  # ~5 seconds; must be 4k+1
+NUM_FRAMES = 121  # ~5 seconds; must be 8k+1
+MAX_FRAMES = 241  # ~10 seconds, the longest a talking clip may run
+
+
+def _spoken_words(line: str) -> int:
+    """Roughly how many words the voice says, with prices and numbers read out ("$13.99" is 4)."""
+    n = 0
+    for tok in line.split():
+        digits = re.sub(r"[^0-9.]", "", tok)
+        n += 1 + (len([d for d in digits.split(".") if d]) * 2 - 1 if digits.strip(".") else 0)
+    return n
+
+
+def _clip_frames(line: str) -> int:
+    """A talking clip long enough to say the whole line and finish with a beat of silence,
+    so the last words (the call to action) are never cut off. 5 s minimum, 10 s maximum."""
+    seconds = 0.8 + _spoken_words(line) / 2.5 + 1.0  # breath in, speech, a smile at the end
+    frames = int(round(seconds * FPS / 8)) * 8 + 1
+    return max(NUM_FRAMES, min(MAX_FRAMES, frames))
 STEPS = int(os.environ.get("WAN_STEPS", "35"))  # 25 looked soft; 35 is sharper for ~+$0.10 a scene
 VIDEO_TIMEOUT = 3600  # seconds Modal lets one clip run (photo edit + animation + voice)
 RENDER_BUDGET = VIDEO_TIMEOUT - 240  # stop early so the job is marked failed, not left "running"
@@ -147,7 +165,8 @@ def _voice_prompt(prompt: str, line: str, voice: str) -> str:
     prompt = " ".join(keep) or prompt
     return (
         f"{prompt.rstrip(' .')}{SHARP}. {pron} speaks directly to the camera the whole time in {style} {who}'s "
-        f"voice, casual and excited like talking to a friend, saying: \"{line}\" {poss.capitalize()} lips, jaw "
+        f"voice, casual and excited like talking to a friend, saying: \"{line}\" {pron} says every word clearly "
+        f"at an easy pace, finishes the whole sentence, then smiles at the camera. {poss.capitalize()} lips, jaw "
         f"and face move naturally in sync with every word. The audio is only {poss} clear, close phone-microphone "
         "voice in a quiet room, with no music and no other sounds."
     )
@@ -493,7 +512,7 @@ class ScriptWriter:
         # verdict, said nonstop in about 13-15 seconds. A short, natural "link's below" closes it.
         cta_rule = (
             f"The LAST scene's line is a very short personal verdict (3-6 words) followed by EXACTLY this call "
-            f"to action, word for word: \"{cta_line}\" (16 words max in total for that line)."
+            f"to action, word for word: \"{cta_line}\" (14 words max in total for that line, so it is said in full)."
             if cta_line and sells else
             f"The LAST scene's line is the personal verdict plus a soft, natural call to action for {thing}, "
             "said like a friend, not a salesperson, e.g. \"Honestly, I'm not going back, link's right below.\" "
@@ -841,8 +860,8 @@ class VoiceVideo:
     @modal.method()
     def render(self, prompt: str, w: int, h: int, image_png: bytes | None,
                two_stage: bool | None = None, out_size: tuple | None = None,
-               negative: str = "", guidance: float = 1.0) -> bytes:
-        """One ~5 s clip with the person speaking, as mp4 bytes with sound."""
+               negative: str = "", guidance: float = 1.0, num_frames: int = NUM_FRAMES) -> bytes:
+        """One 5-10 s clip with the person speaking, as mp4 bytes with sound."""
         import tempfile
 
         import torch
@@ -859,7 +878,7 @@ class VoiceVideo:
                     if image_png else Image.new("RGB", (fw, fh), "white"))
 
         # Distilled settings: one pass per step, no extra guidance passes.
-        fast = dict(prompt=prompt, num_frames=NUM_FRAMES, frame_rate=float(FPS), guidance_scale=guidance,
+        fast = dict(prompt=prompt, num_frames=num_frames, frame_rate=float(FPS), guidance_scale=guidance,
                     negative_prompt=negative or None,
                     stg_scale=0.0, modality_scale=1.0, audio_guidance_scale=1.0, audio_stg_scale=0.0,
                     audio_modality_scale=1.0, return_dict=False)
@@ -1167,7 +1186,8 @@ def make_scene(job_id: str):
             # Best quality: picture and voice made together, so the lips really match.
             _stage(sb, job_id, "animating with voice", t0)
             try:
-                call = VoiceVideo().render.spawn(_voice_prompt(inp["prompt"], inp["line"], inp["voice"]), w, h, png)
+                call = VoiceVideo().render.spawn(_voice_prompt(inp["prompt"], inp["line"], inp["voice"]), w, h, png,
+                                                 num_frames=_clip_frames(inp["line"]))
                 try:
                     # Leave enough time for the backup path if this one fails.
                     data = call.get(timeout=max(120, min(1500, VIDEO_TIMEOUT - (time.time() - t0) - 1500)))
