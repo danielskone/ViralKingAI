@@ -15,4 +15,4 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install modal
-      - run: modal run tmp/redo.py
+      - run: modal run tmp/join.py
