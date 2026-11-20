@@ -101,6 +101,40 @@ talk_image = (
 LIPSYNC_STEPS = int(os.environ.get("LIPSYNC_STEPS", "12"))  # was 20; mouths still look right
 TALK_SECONDS = NUM_FRAMES / FPS  # one spoken line per ~5 s clip
 
+# Voice + video in one pass: LTX-2.3 (Lightricks, open weights, not gated) makes the picture AND the
+# speech together, so mouths, voice and expressions match like real UGC. 8-step distilled checkpoint.
+# Falls back to Wan + Kokoro + LatentSync if it fails. Set VOICE_ENGINE=classic in the secret to turn it off.
+LTX_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
+LTX_STEPS = 8
+ltx_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg")
+    .pip_install(
+        "torch==2.9.1", "diffusers==0.43.0", "transformers==5.23.0", "accelerate", "sentencepiece",
+        "av", "imageio[ffmpeg]", "pillow", "numpy", "huggingface_hub",
+    )
+    .env({"HF_HOME": MODELS_DIR, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+)
+VOICE_STYLE = {  # Kokoro voice id -> how LTX should make the voice sound
+    "a": "a bright, upbeat, natural young American",
+    "b": "a warm, natural British",
+}
+
+
+def _voice_prompt(prompt: str, line: str, voice: str) -> str:
+    """Scene prompt + the exact words, written the way LTX-2 captions describe sound."""
+    male = len(voice) > 1 and voice[1] == "m"
+    who, pron, poss = ("man", "He", "his") if male else ("woman", "She", "her")
+    style = VOICE_STYLE.get(voice[:1], VOICE_STYLE["a"])
+    line = line.strip().replace('"', "'")
+    return (
+        f"{prompt.rstrip(' .')}{SHARP}. {pron} speaks directly to the camera the whole time in {style} {who}'s "
+        f"voice, casual and excited like talking to a friend, saying: \"{line}\" {poss.capitalize()} lips, jaw "
+        f"and face move naturally in sync with every word. The audio is only {poss} clear, close phone-microphone "
+        "voice in a quiet room, with no music and no other sounds."
+    )
+
+
 web_image = modal.Image.debian_slim(python_version="3.11").pip_install(
     "fastapi[standard]", "supabase==2.22.4"
 )
@@ -654,6 +688,64 @@ class ImageEditor:
 # --------------------------------------------------------------------------- video
 
 
+@app.cls(gpu=["H100", "A100-80GB"], image=ltx_image, volumes={MODELS_DIR: models}, memory=81920,
+         timeout=1800, scaledown_window=60, max_containers=2)
+class VoiceVideo:
+    @modal.enter()
+    def load(self):
+        import torch
+        from diffusers import LTX2ImageToVideoPipeline
+
+        self.pipe = LTX2ImageToVideoPipeline.from_pretrained(LTX_ID, torch_dtype=torch.bfloat16)
+        # The text encoder and the video model take turns on the GPU so both fit.
+        self.pipe.enable_model_cpu_offload()
+        self.pipe.vae.enable_tiling()
+
+    @modal.method()
+    def render(self, prompt: str, w: int, h: int, image_png: bytes | None) -> bytes:
+        """One ~5 s clip with the person speaking, as mp4 bytes with sound."""
+        import tempfile
+
+        import torch
+        from diffusers.pipelines.ltx2.utils import DISTILLED_SIGMA_VALUES
+        from diffusers.utils import encode_video
+        from PIL import Image
+
+        t = time.time()
+        image = (Image.open(io.BytesIO(image_png)).convert("RGB").resize((w, h), Image.LANCZOS)
+                 if image_png else Image.new("RGB", (w, h), "white"))
+        try:
+            # Distilled settings: one pass per step, no extra guidance passes.
+            video, audio = self.pipe(
+                image=image, prompt=prompt, width=w, height=h, num_frames=NUM_FRAMES, frame_rate=float(FPS),
+                num_inference_steps=LTX_STEPS, sigmas=DISTILLED_SIGMA_VALUES,
+                guidance_scale=1.0, stg_scale=0.0, modality_scale=1.0,
+                audio_guidance_scale=1.0, audio_stg_scale=0.0, audio_modality_scale=1.0,
+                output_type="np", return_dict=False,
+            )
+            with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
+                encode_video(video[0], fps=FPS, audio=audio[0].float().cpu(),
+                             audio_sample_rate=self.pipe.vocoder.config.output_sampling_rate, output_path=f.name)
+                data = open(f.name, "rb").read()
+            print(f"voice video rendered in {time.time() - t:.0f}s on {torch.cuda.get_device_name(0)}", flush=True)
+            return data
+        finally:
+            import gc
+
+            gc.collect()
+            torch.cuda.empty_cache()
+
+
+@app.function(image=ltx_image, volumes={MODELS_DIR: models}, timeout=3600)
+def prefetch_ltx() -> str:
+    from huggingface_hub import snapshot_download
+
+    t = time.time()
+    snapshot_download(LTX_ID)
+    models.commit()
+    return f"{LTX_ID}: {time.time() - t:.0f}s"
+
+
 @app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
          secrets=secrets, timeout=VIDEO_TIMEOUT, scaledown_window=60, max_containers=2)
 class VideoGenerator:
@@ -826,10 +918,27 @@ def make_scene(job_id: str):
             buf = io.BytesIO()
             image.save(buf, "PNG")
             png = buf.getvalue()
-        data = VideoGenerator().animate.remote(inp["prompt"], w, h, png, t0)
+        data, voice_mode = None, None
+        if inp.get("voice") and inp.get("line") and os.environ.get("VOICE_ENGINE", "ltx") != "classic":
+            # Best quality: picture and voice made together, so the lips really match.
+            _stage(sb, job_id, "animating with voice", t0)
+            try:
+                call = VoiceVideo().render.spawn(_voice_prompt(inp["prompt"], inp["line"], inp["voice"]), w, h, png)
+                try:
+                    # Leave enough time for the backup path if this one fails.
+                    data = call.get(timeout=max(120, min(1500, VIDEO_TIMEOUT - (time.time() - t0) - 1500)))
+                except BaseException:
+                    call.cancel()
+                    raise
+                voice_mode = "native"
+            except Exception as le:  # noqa: BLE001
+                print(f"voice video failed, using the backup engine: {le!r}", flush=True)
+                _stage(sb, job_id, f"voice video failed ({le!r})"[:200] + ", using backup", t0)
+                data = None
+        if data is None:
+            data = VideoGenerator().animate.remote(inp["prompt"], w, h, png, t0)
 
-        voice_mode = None
-        if inp.get("voice") and inp.get("line"):
+        if voice_mode is None and inp.get("voice") and inp.get("line"):
             # Give the avatar a voice and sync their lips. If anything goes wrong the
             # silent clip is still delivered rather than failing the whole scene.
             _stage(sb, job_id, "adding the voice", t0)
@@ -1074,6 +1183,30 @@ def prefetch() -> list[str]:
 def warm_models():
     """`modal run worker/modal_app.py::warm_models`"""
     print(prefetch.remote())
+    print(prefetch_ltx.remote())
+
+
+@app.local_entrypoint()
+def voice_smoke():
+    """`modal run worker/modal_app.py::voice_smoke` renders one test clip with LTX voice + video
+    to voice-smoke.mp4 (about $0.30 of GPU time)."""
+    import urllib.request
+
+    print(prefetch_ltx.remote())
+    url = "https://huggingface.co/datasets/a-r-r-o-w/tiny-meme-dataset-captioned/resolve/main/images/8.png"
+    raw = urllib.request.urlopen(url, timeout=60).read()
+    from PIL import Image
+
+    buf = io.BytesIO()
+    _fit(Image.open(io.BytesIO(raw)), *SIZES["9:16"]).save(buf, "PNG")
+    prompt = _voice_prompt(
+        "Medium close-up, vertical iPhone video, of a young woman looking straight into the camera with wide eyes, "
+        "she leans in with an excited, surprised smile and talks with her hands, static camera",
+        "Okay, I cannot believe how good this is, I literally use it every single day now!", "af_heart")
+    t = time.time()
+    data = VoiceVideo().render.remote(prompt, *SIZES["9:16"], buf.getvalue())
+    open("voice-smoke.mp4", "wb").write(data)
+    print(f"voice-smoke.mp4: {len(data)} bytes in {time.time() - t:.0f}s")
 
 
 VOICE_IDS = ["af_heart", "af_bella", "am_michael", "am_fenrir", "bf_emma", "bm_george"]
