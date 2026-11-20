@@ -9,6 +9,7 @@ import { isVideo, withUrls } from "@/lib/library";
 import { deleteAsset, deleteProject, startGeneration } from "@/app/actions";
 import { Arrow, Box, Film, Trash, User } from "@/components/icons";
 import DeleteButton from "@/components/DeleteButton";
+import Spinner from "@/components/Spinner";
 import { CTA_OPTIONS, DEFAULT_CTA } from "@/lib/cta";
 
 type ScriptIn = { idea?: string; scene_count?: number; model_shot?: boolean; product_path?: string | null; avatar_path?: string | null; voice?: string | null; cta_line?: string | null };
@@ -50,6 +51,14 @@ export default async function ProjectPage({
   const run = latestRun(jobs ?? []);
   const busy = run.some((j) => j.status === "queued" || j.status === "running");
   const lastScript = run.find((j) => j.job_type === "script");
+  // What the AI is doing right now, shown next to the spinner.
+  const sceneJobs = run.filter((j) => j.job_type !== "script");
+  const scenesDone = sceneJobs.filter((j) => j.status === "succeeded").length;
+  const stage = !sceneJobs.length
+    ? "Writing your script…"
+    : scenesDone < sceneJobs.length
+      ? `Filming scene ${Math.min(scenesDone + 1, sceneJobs.length)} of ${sceneJobs.length}…`
+      : "Putting your video together…";
   const lastIn = (lastScript?.input ?? {}) as ScriptIn;
   const lastIdea = lastIn.idea ?? project.offer_description ?? "";
   const lastCount = String(lastIn.scene_count ?? 3);
@@ -97,6 +106,12 @@ export default async function ProjectPage({
         <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
           {/* Results */}
           <section className="space-y-4">
+            {busy && clips.length > 0 && (
+              <div className="panel flex items-center gap-3 px-4 py-3">
+                <Spinner className="h-6 w-6 shrink-0" />
+                <p className="text-sm text-foreground">{stage} <span className="text-muted">Your new video will appear here.</span></p>
+              </div>
+            )}
             {full && (
               <div className="space-y-3">
                 <h2 className="eyebrow">Your full video</h2>
@@ -132,10 +147,18 @@ export default async function ProjectPage({
                 ))}
               </div>
             ) : (
-              <div className={"panel flex flex-col items-center justify-center gap-3 text-center text-muted " + (tall ? "aspect-[4/5]" : "aspect-video")}>
-                <Film className="h-10 w-10 text-gold" />
-                {busy ? "Your AI is filming… this takes about 10–15 minutes." : "No clips yet. Describe your ad and press Generate."}
-              </div>
+              busy ? (
+                <div className={"panel flex flex-col items-center justify-center gap-4 px-6 text-center " + (tall ? "aspect-[4/5]" : "aspect-video")}>
+                  <Spinner className="h-16 w-16" />
+                  <p className="text-lg font-medium text-foreground">{stage}</p>
+                  <p className="text-sm text-muted">This takes about 10–15 minutes. You can leave this page and come back.</p>
+                </div>
+              ) : (
+                <div className={"panel flex flex-col items-center justify-center gap-3 text-center text-muted " + (tall ? "aspect-[4/5]" : "aspect-video")}>
+                  <Film className="h-10 w-10 text-gold" />
+                  No clips yet. Describe your ad and press Generate.
+                </div>
+              )
             )}
             <JobsPanel key={lastScript?.id ?? "none"} projectId={project.id} initial={(jobs ?? []).map((j) => ({ ...j, output: undefined }))} />
           </section>
