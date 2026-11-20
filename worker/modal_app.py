@@ -391,7 +391,7 @@ class ScriptWriter:
         ).strip()
 
     def _write(self, title: str, offer: str, idea: str, subject: str, n: int, talk: bool = False,
-               product_name: str = "", product_desc: str = "", person_desc: str = "") -> dict:
+               product_name: str = "", product_desc: str = "", person_desc: str = "", cta_line: str = "") -> dict:
         ugc = subject != "product"  # a person is on screen: use the UGC creator style
         if ugc:
             # Learned from Daniel's 4 reference UGC videos (skin oil, tumbler, blender, handbag):
@@ -479,6 +479,9 @@ class ScriptWriter:
         # a personal-result hook, 2-3 concrete everyday benefits in casual speech, then a personal
         # verdict, said nonstop in about 13-15 seconds. A short, natural "link's below" closes it.
         cta_rule = (
+            f"The LAST scene's line is a very short personal verdict (3-6 words) followed by EXACTLY this call "
+            f"to action, word for word: \"{cta_line}\" (16 words max in total for that line)."
+            if cta_line and sells else
             f"The LAST scene's line is the personal verdict plus a soft, natural call to action for {thing}, "
             "said like a friend, not a salesperson, e.g. \"Honestly, I'm not going back, link's right below.\" "
             "or \"I literally take it everywhere now, the link's down there if you want one.\" "
@@ -569,7 +572,14 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
         if not scenes:
             raise ValueError("Script model returned no scenes")
         cta = (data.get("cta") or "").strip()
-        if talk and cta:
+        if talk and cta_line:
+            # The customer picked the exact call to action: make sure it ends the video word for word.
+            last = (scenes[-1].get("line") or "").strip()
+            if cta_line.lower().rstrip(".!") not in last.lower():
+                lead = last.split(".")[0].split("!")[0].strip() if last else ""
+                lead = lead if 0 < len(lead.split()) <= 7 else ""
+                scenes[-1]["line"] = f"{lead.rstrip(',')}! {cta_line}".strip("! ") if lead else cta_line
+        elif talk and cta:
             # The viewer must HEAR the call to action, so make sure the last line has one.
             last = (scenes[-1].get("line") or "").strip()
             cta_words = ("link", "grab", "get yours", "get one", "get these", "shop", "order", "buy", "tap")
@@ -629,7 +639,8 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                     print(f"could not describe the avatar photo: {pe!r}", flush=True)
             script = self._write(project["title"], project.get("offer_description") or "", idea, subject, n,
                                  talk=bool(voice), product_name=(inp.get("product_name") or "").strip()[:120],
-                                 product_desc=product_desc, person_desc=person_desc)
+                                 product_desc=product_desc, person_desc=person_desc,
+                                 cta_line=(inp.get("cta_line") or "").strip()[:120])
             script["product"] = product_desc
             exact = _exact_lines(idea, len(script["scenes"])) if voice else None
             if exact:
