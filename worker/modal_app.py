@@ -26,7 +26,11 @@ import modal
 APP_NAME = "viralking-ai"
 LLM_ID = "Qwen/Qwen2.5-VL-7B-Instruct"  # sees the product photo, so scripts describe the real product
 VIDEO_ID = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
-EDIT_ID = "Qwen/Qwen-Image-Edit"  # Apache 2.0; puts the product on a model for the first frame
+# Apache 2.0. The 2511 edit model takes the avatar and the product as two separate pictures
+# (no side-by-side board), which keeps the face and the product more exact.
+EDIT_ID = os.environ.get("EDIT_MODEL", "Qwen/Qwen-Image-Edit-2511")
+# 4-step distilled LoRA for the edit model: ~10x fewer model passes than 20 steps with CFG.
+EDIT_LORA = os.environ.get("EDIT_LORA", "lightx2v/Qwen-Image-Edit-2511-Lightning")
 EDIT_STEPS = 20  # 20 is plenty for a product-in-hand photo
 MODELS_DIR = "/models"
 
@@ -106,6 +110,12 @@ TALK_SECONDS = NUM_FRAMES / FPS  # one spoken line per ~5 s clip
 # Falls back to Wan + Kokoro + LatentSync if it fails. Set VOICE_ENGINE=classic in the secret to turn it off.
 LTX_ID = "diffusers/LTX-2.3-Distilled-Diffusers"
 LTX_STEPS = 8
+# Two-stage render (LTX's own recipe): 8 steps at half size, a 2x latent upscaler, then 3 refine
+# steps at full size. Sharper than one pass, and most steps run on a quarter of the pixels.
+LTX_TWO_STAGE = os.environ.get("LTX_TWO_STAGE", "1") == "1"
+# Final size of a talking clip per frame size the scene asks for (native 1080p when set).
+LTX_OUT = {(704, 1280): (704, 1280), (1280, 704): (1280, 704), (960, 960): (960, 960)}
+UPSAMPLER_REPOS = [(LTX_ID, "latent_upsampler"), ("diffusers/LTX-2.3-Diffusers", "latent_upsampler")]
 ltx_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
@@ -115,6 +125,8 @@ ltx_image = (
     )
     .env({"HF_HOME": MODELS_DIR, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
 )
+# The photo model runs on the newer libraries too (QwenImageEditPlusPipeline, LoRA loading).
+edit_image = ltx_image.pip_install("peft", "supabase==2.22.4")
 VOICE_STYLE = {  # Kokoro voice id -> how LTX should make the voice sound
     "a": "a bright, upbeat, natural young American",
     "b": "a warm, natural British",
@@ -729,25 +741,42 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
 # --------------------------------------------------------------------------- image edit
 
 
-@app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
+@app.cls(gpu=["H100", "A100-80GB"], image=edit_image, volumes={MODELS_DIR: models},
          secrets=secrets, timeout=1500, scaledown_window=5, max_containers=2)
 class ImageEditor:
     pipe = None
+    steps, cfg = EDIT_STEPS, 4.0
 
     def _load(self, report):
         """Load lazily inside the call, so a slow load shows up on the job's stage."""
         if self.pipe is not None:
             return
         import torch
-        from diffusers import QwenImageEditPipeline
+        from diffusers import QwenImageEditPlusPipeline
 
         report("model photo: loading the photo model")
-        self.pipe = QwenImageEditPipeline.from_pretrained(EDIT_ID, torch_dtype=torch.bfloat16).to("cuda")
+        self.pipe = QwenImageEditPlusPipeline.from_pretrained(EDIT_ID, torch_dtype=torch.bfloat16).to("cuda")
+        try:
+            from huggingface_hub import list_repo_files
+
+            files = [f for f in list_repo_files(EDIT_LORA)
+                     if f.endswith(".safetensors") and "4step" in f.lower() and "fp8" not in f.lower()]
+            files.sort(key=lambda f: ("bf16" not in f.lower(), f))
+            self.pipe.load_lora_weights(EDIT_LORA, weight_name=files[0])
+            self.pipe.fuse_lora()
+            self.steps, self.cfg = 4, 1.0
+            print(f"photo model: {EDIT_ID} + {files[0]} (4 steps)", flush=True)
+            try:
+                models.commit()  # keep the LoRA in the volume for the next cold start
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as le:  # noqa: BLE001
+            print(f"fast photo LoRA not loaded, using {EDIT_STEPS} steps: {le!r}", flush=True)
 
     @modal.method()
-    def edit(self, image_png: bytes, prompt: str, job_id: str = "", t0: float = 0.0) -> bytes:
-        """Turn a product photo into a photo of a person wearing/using it. The input is
-        already padded to the video's aspect ratio, so the output keeps that ratio."""
+    def edit(self, images, prompt: str, job_id: str = "", t0: float = 0.0, w: int = 0, h: int = 0) -> bytes:
+        """Make the 'person holding the product' photo. `images` is one PNG, or a list of PNGs
+        (the avatar first, then the product). The output is w x h when given."""
         import torch
         from PIL import Image
 
@@ -762,18 +791,20 @@ class ImageEditor:
 
         report(f"model photo: GPU ready ({torch.cuda.get_device_name(0)})")
         self._load(report)
-        steps = EDIT_STEPS
+        steps = self.steps
 
         def tick(_pipe, step, _t, kwargs):
-            if (step + 1) % 5 == 0 or step == 0:
-                report(f"model photo: step {step + 1}/{steps}")
+            report(f"model photo: step {step + 1}/{steps}")
             return kwargs
 
-        img = Image.open(io.BytesIO(image_png)).convert("RGB")
+        pngs = images if isinstance(images, list) else [images]
+        imgs = [Image.open(io.BytesIO(b)).convert("RGB") for b in pngs]
+        if not (w and h):
+            w, h = imgs[-1].size
         out = self.pipe(
-            image=img, prompt=prompt, negative_prompt=" ", true_cfg_scale=4.0,
-            num_inference_steps=steps, generator=torch.Generator("cuda").manual_seed(0),
-            callback_on_step_end=tick,
+            image=imgs if len(imgs) > 1 else imgs[0], prompt=prompt, negative_prompt=" ",
+            true_cfg_scale=self.cfg, num_inference_steps=steps, width=w // 16 * 16, height=h // 16 * 16,
+            generator=torch.Generator("cuda").manual_seed(0), callback_on_step_end=tick,
         ).images[0]
         report("model photo: done")
         buf = io.BytesIO()
@@ -799,34 +830,66 @@ class VoiceVideo:
         # The text encoder and the video model take turns on the GPU so both fit.
         self.pipe.enable_model_cpu_offload()
         self.pipe.vae.enable_tiling()
+        # The small 2x latent upscaler for the two-stage render (stays on the GPU, ~1 GB).
+        self.upsampler = None
+        if LTX_TWO_STAGE:
+            from diffusers.models.latent_upscaler import LTX2LatentUpsamplerModel
+
+            for repo, sub in UPSAMPLER_REPOS:
+                try:
+                    self.upsampler = LTX2LatentUpsamplerModel.from_pretrained(
+                        repo, subfolder=sub, torch_dtype=torch.bfloat16).to("cuda").eval()
+                    print(f"latent upscaler: {repo}/{sub}", flush=True)
+                    break
+                except Exception as ue:  # noqa: BLE001
+                    print(f"latent upscaler not in {repo}: {ue!r}", flush=True)
 
     @modal.method()
-    def render(self, prompt: str, w: int, h: int, image_png: bytes | None) -> bytes:
+    def render(self, prompt: str, w: int, h: int, image_png: bytes | None,
+               two_stage: bool | None = None, out_size: tuple | None = None) -> bytes:
         """One ~5 s clip with the person speaking, as mp4 bytes with sound."""
         import tempfile
 
         import torch
-        from diffusers.pipelines.ltx2.utils import DISTILLED_SIGMA_VALUES
+        from diffusers.pipelines.ltx2.utils import DISTILLED_SIGMA_VALUES, STAGE_2_DISTILLED_SIGMA_VALUES
         from diffusers.utils import encode_video
         from PIL import Image
 
         t = time.time()
-        image = (Image.open(io.BytesIO(image_png)).convert("RGB").resize((w, h), Image.LANCZOS)
-                 if image_png else Image.new("RGB", (w, h), "white"))
+        w, h = tuple(out_size) if out_size else LTX_OUT.get((w, h), (w, h))
+        two = (LTX_TWO_STAGE if two_stage is None else two_stage) and self.upsampler is not None
+
+        def frame(fw, fh):
+            return (Image.open(io.BytesIO(image_png)).convert("RGB").resize((fw, fh), Image.LANCZOS)
+                    if image_png else Image.new("RGB", (fw, fh), "white"))
+
+        # Distilled settings: one pass per step, no extra guidance passes.
+        fast = dict(prompt=prompt, num_frames=NUM_FRAMES, frame_rate=float(FPS), guidance_scale=1.0,
+                    stg_scale=0.0, modality_scale=1.0, audio_guidance_scale=1.0, audio_stg_scale=0.0,
+                    audio_modality_scale=1.0, return_dict=False)
         try:
-            # Distilled settings: one pass per step, no extra guidance passes.
-            video, audio = self.pipe(
-                image=image, prompt=prompt, width=w, height=h, num_frames=NUM_FRAMES, frame_rate=float(FPS),
-                num_inference_steps=LTX_STEPS, sigmas=DISTILLED_SIGMA_VALUES,
-                guidance_scale=1.0, stg_scale=0.0, modality_scale=1.0,
-                audio_guidance_scale=1.0, audio_stg_scale=0.0, audio_modality_scale=1.0,
-                output_type="np", return_dict=False,
-            )
+            if two:
+                # Stage 1: the whole motion and voice at half size (a quarter of the pixels).
+                lat, audio_lat = self.pipe(
+                    image=frame(w // 2, h // 2), width=w // 2, height=h // 2, num_inference_steps=LTX_STEPS,
+                    sigmas=DISTILLED_SIGMA_VALUES, output_type="latent", **fast)
+                with torch.no_grad():
+                    lat = self.upsampler(lat.to("cuda", torch.bfloat16))
+                # Stage 2: 3 refine steps at full size add the fine detail (face, skin, product print).
+                video, audio = self.pipe(
+                    image=frame(w, h), width=w, height=h, latents=lat, audio_latents=audio_lat,
+                    noise_scale=STAGE_2_DISTILLED_SIGMA_VALUES[0], num_inference_steps=len(STAGE_2_DISTILLED_SIGMA_VALUES),
+                    sigmas=STAGE_2_DISTILLED_SIGMA_VALUES, output_type="np", **fast)
+            else:
+                video, audio = self.pipe(
+                    image=frame(w, h), width=w, height=h, num_inference_steps=LTX_STEPS,
+                    sigmas=DISTILLED_SIGMA_VALUES, output_type="np", **fast)
             with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
                 encode_video(video[0], fps=FPS, audio=audio[0].float().cpu(),
                              audio_sample_rate=self.pipe.vocoder.config.output_sampling_rate, output_path=f.name)
                 data = open(f.name, "rb").read()
-            print(f"voice video rendered in {time.time() - t:.0f}s on {torch.cuda.get_device_name(0)}", flush=True)
+            print(f"voice video ({'two-stage' if two else 'one pass'}, {w}x{h}) rendered in "
+                  f"{time.time() - t:.0f}s on {torch.cuda.get_device_name(0)}", flush=True)
             return data
         finally:
             import gc
@@ -965,29 +1028,33 @@ def _echoed(first_frame) -> bool:
     return "word image-editing instruction" in t or "40-70 word" in t
 
 
+def _png(img) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _two_image_instruction(instruction: str) -> str:
+    return (
+        "Make one photorealistic photo of the person from the first image holding the exact product from "
+        "the second image. Keep the person's face, hair, skin tone and body exactly the same, and keep the "
+        "product's shape, colors, prints and text exactly the same. The person's face appears only once, on "
+        "the person: never put a face, photo or person on the product. No split screen, no collage. "
+        + instruction
+    )
+
+
 def _photo_request(sb, product_path: str, avatar_path: str | None, instruction: str, w: int, h: int):
-    """The image and instruction for the 'person holding the product' photo."""
+    """The pictures and instruction for the 'person holding the product' photo: the avatar and
+    the product as two separate pictures (the 2511 edit model reads both), or the product alone."""
     from PIL import Image
 
     raw = sb.storage.from_("media").download(product_path)
-    image = _fit(Image.open(io.BytesIO(raw)), w, h)
     if avatar_path:
-        # Avatar on the left, product on the right; ask for one merged photo.
-        face = Image.open(io.BytesIO(sb.storage.from_("media").download(avatar_path)))
-        half = w // 2
-        board = Image.new("RGB", (w, h), "white")
-        board.paste(_fit(face, half, h), (0, 0))
-        board.paste(_fit(Image.open(io.BytesIO(raw)), w - half, h), (half, 0))
-        image = board
-        instruction = (
-            "The left half shows a person and the right half shows a product. Create ONE "
-            "single full-frame photo (no split screen, no collage) of that same person, "
-            "same face and hair, holding or using that exact product. The person's face appears only "
-            "once, on the person: never put a face, photo or person on the product. " + instruction
-        )
-    buf = io.BytesIO()
-    image.save(buf, "PNG")
-    return buf.getvalue(), instruction
+        face = Image.open(io.BytesIO(sb.storage.from_("media").download(avatar_path))).convert("RGB")
+        product = Image.open(io.BytesIO(raw)).convert("RGB")
+        return [_png(face), _png(product)], _two_image_instruction(instruction)
+    return [_png(_fit(Image.open(io.BytesIO(raw)), w, h))], instruction
 
 
 @app.function(image=gpu_image, secrets=secrets, timeout=1800)
@@ -1000,7 +1067,7 @@ def start_scenes(rows: list[dict]):
         w, h = SIZES.get(first.get("aspect_ratio", "9:16"), SIZES["9:16"])
         png, instruction = _photo_request(sb, first["image_path"], first.get("avatar_path"),
                                           first["model_shot"], w, h)
-        call = ImageEditor().edit.spawn(png, instruction, "", 0.0)
+        call = ImageEditor().edit.spawn(png, instruction, "", 0.0, w, h)
         try:
             edited = call.get(timeout=1200)
         except BaseException:
@@ -1041,7 +1108,7 @@ def make_scene(job_id: str):
                 _stage(sb, job_id, "making the model photo", t0)
                 try:
                     # Bounded so the animation and voice still fit in this job's time.
-                    call = ImageEditor().edit.spawn(photo_png, instruction, job_id, t0)
+                    call = ImageEditor().edit.spawn(photo_png, instruction, job_id, t0, w, h)
                     try:
                         edited = call.get(timeout=1200)
                     except BaseException:
@@ -1355,6 +1422,89 @@ def voice_smoke():
     data = VoiceVideo().render.remote(prompt, *SIZES["9:16"], buf.getvalue())
     open("voice-smoke.mp4", "wb").write(data)
     print(f"voice-smoke.mp4: {len(data)} bytes in {time.time() - t:.0f}s")
+
+
+@app.function(image=ltx_image, timeout=600)
+def _sheet(mp4: bytes, n: int = 4, width: int = 240) -> dict:
+    """Small JPEG contact sheet + sound stats of a clip, for test logs."""
+    import base64
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        open(f"{d}/c.mp4", "wb").write(mp4)
+        dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+                                    f"{d}/c.mp4"], capture_output=True, text=True).stdout.strip() or 0)
+        size = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                               "stream=width,height", "-of", "csv=p=0", f"{d}/c.mp4"],
+                              capture_output=True, text=True).stdout.strip()
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", f"{d}/c.mp4", "-vf",
+                        f"fps={n}/{max(dur, 1):.2f},scale={width}:-2,tile={n}x1", "-frames:v", "1", "-q:v", "4",
+                        f"{d}/s.jpg"], check=True)
+        vol = subprocess.run(["ffmpeg", "-i", f"{d}/c.mp4", "-af", "volumedetect", "-f", "null", "-"],
+                             capture_output=True, text=True).stderr
+        mean = re.search(r"mean_volume: ([-\d.]+)", vol)
+        return {"duration": dur, "size": size, "mean_db": mean.group(1) if mean else None,
+                "sheet_b64": base64.b64encode(open(f"{d}/s.jpg", "rb").read()).decode()}
+
+
+@app.local_entrypoint()
+def upgrade_smoke():
+    """`modal run worker/modal_app.py::upgrade_smoke` tests the 2511 photo model and the two-stage
+    LTX render on public test images, printing timings and small contact sheets (~$1 of GPU)."""
+    import base64
+    import urllib.request
+
+    from PIL import Image
+
+    def b64(png: bytes, width: int = 240) -> str:
+        im = Image.open(io.BytesIO(png)).convert("RGB")
+        im = im.resize((width, round(im.height * width / im.width)))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=80)
+        return base64.b64encode(buf.getvalue()).decode()
+
+    print(prefetch.remote())  # downloads on CPU, so the GPUs never wait on a download
+    print(prefetch_ltx.remote())
+    url = "https://huggingface.co/datasets/a-r-r-o-w/tiny-meme-dataset-captioned/resolve/main/images/8.png"
+    person = Image.open(io.BytesIO(urllib.request.urlopen(url, timeout=60).read())).convert("RGB")
+    w, h = SIZES["9:16"]
+    t = time.time()
+    product = ImageEditor().edit.remote(
+        [_png(Image.new("RGB", (768, 768), "white"))],
+        "Turn this blank image into a clean e-commerce product photo of a matte lavender insulated "
+        "tumbler with a silver lid, a handle and a white straw, standing on a plain white background.",
+        "", 0.0, 768, 768)
+    print(f"RESULT product photo {time.time() - t:.0f}s (includes model load)")
+    print("IMG product " + b64(product))
+    t = time.time()
+    photo = ImageEditor().edit.remote(
+        [_png(person), product],
+        _two_image_instruction("A casual iPhone photo at home in a bright kitchen, soft window daylight, the person "
+                               "holding the tumbler up beside their face with an excited smile, framed from the "
+                               "waist up so the face is large and clear."), "", 0.0, w, h)
+    print(f"RESULT person photo {time.time() - t:.0f}s (warm)")
+    print("IMG photo " + b64(photo))
+    prompt = _voice_prompt(
+        "Medium close-up, vertical iPhone video on a tripod, of a young woman in her bright kitchen, soft window "
+        "daylight. She leans toward the camera with wide eyes and an excited smile, lifts the lavender tumbler "
+        "up beside her face toward the lens and talks with her other hand moving. Static camera, her face and "
+        "the tumbler in sharp focus, realistic skin texture, authentic TikTok UGC look.",
+        "Okay, I've been using this tumbler every day and it keeps my water cold all day.", "af_heart")
+    runs = [("one-pass 704x1280", False, (704, 1280)), ("two-stage 704x1280", True, (704, 1280)),
+            ("two-stage 1088x1920", True, (1088, 1920))]
+    vv = VoiceVideo()
+    for name, two, size in runs:
+        t = time.time()
+        try:
+            clip = vv.render.remote(prompt, w, h, photo, two, size)
+        except Exception as e:  # noqa: BLE001
+            print(f"RESULT {name} FAILED after {time.time() - t:.0f}s: {e!r}")
+            continue
+        info = _sheet.remote(clip)
+        print(f"RESULT {name}: {time.time() - t:.0f}s, {info['size']}, {info['duration']:.2f}s, "
+              f"mean {info['mean_db']} dB, {len(clip) // 1024} KB")
+        print(f"IMG {name.replace(' ', '_')} " + info["sheet_b64"])
 
 
 VOICE_IDS = ["af_heart", "af_bella", "am_michael", "am_fenrir", "bf_emma", "bm_george"]
