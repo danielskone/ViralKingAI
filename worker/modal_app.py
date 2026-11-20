@@ -1470,11 +1470,15 @@ def _sheet(mp4: bytes, n: int = 4, width: int = 240) -> dict:
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", f"{d}/c.mp4", "-vf",
                         f"fps={n}/{max(dur, 1):.2f},scale={width}:-2,tile={n}x1", "-frames:v", "1", "-q:v", "4",
                         f"{d}/s.jpg"], check=True)
+        # A full-resolution crop of the face area at 2.5 s, to compare sharpness.
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", "2.5", "-i", f"{d}/c.mp4", "-vf",
+                        "crop=iw*0.6:iw*0.6:iw*0.2:ih*0.08", "-frames:v", "1", "-q:v", "3", f"{d}/f.jpg"], check=True)
         vol = subprocess.run(["ffmpeg", "-i", f"{d}/c.mp4", "-af", "volumedetect", "-f", "null", "-"],
                              capture_output=True, text=True).stderr
         mean = re.search(r"mean_volume: ([-\d.]+)", vol)
         return {"duration": dur, "size": size, "mean_db": mean.group(1) if mean else None,
-                "sheet_b64": base64.b64encode(open(f"{d}/s.jpg", "rb").read()).decode()}
+                "sheet_b64": base64.b64encode(open(f"{d}/s.jpg", "rb").read()).decode(),
+                "crop_b64": base64.b64encode(open(f"{d}/f.jpg", "rb").read()).decode()}
 
 
 @app.local_entrypoint()
@@ -1520,10 +1524,9 @@ def upgrade_smoke():
         "up beside her face toward the lens and talks with her other hand moving. Static camera, her face and "
         "the tumbler in sharp focus, realistic skin texture, authentic TikTok UGC look.",
         "Okay, I've been using this tumbler every day and it keeps my water cold all day.", "af_heart")
-    neg = "subtitles, captions, text, letters, words on screen, watermark, logo"
-    runs = [("two-stage 704x1280", True, (704, 1280), "", 1.0),
-            ("one-pass 704x1280", False, (704, 1280), "", 1.0),
-            ("one-pass 704x1280 neg", False, (704, 1280), neg, 2.0)]
+    runs = [("one-pass", False, (704, 1280), "", 1.0),
+            ("two-stage", True, (704, 1280), "", 1.0),
+            ("two-stage-again", True, (704, 1280), "", 1.0)]
     vv = VoiceVideo()
     for name, two, size, negative, guidance in runs:
         t = time.time()
@@ -1535,9 +1538,10 @@ def upgrade_smoke():
         info = _sheet.remote(clip)
         print(f"RESULT {name}: {time.time() - t:.0f}s, {info['size']}, {info['duration']:.2f}s, "
               f"mean {info['mean_db']} dB, {len(clip) // 1024} KB")
-        sheet = info["sheet_b64"]
-        for i in range(0, len(sheet), 3000):
-            print(f"IMG {name.replace(' ', '_')} {i // 3000} {sheet[i:i + 3000]}", flush=True)
+        for kind in ("sheet", "crop"):
+            data = info[f"{kind}_b64"]
+            for i in range(0, len(data), 3000):
+                print(f"IMG {name.replace(' ', '_')}-{kind} {i // 3000} {data[i:i + 3000]}", flush=True)
 
 
 VOICE_IDS = ["af_heart", "af_bella", "am_michael", "am_fenrir", "bf_emma", "bm_george"]
