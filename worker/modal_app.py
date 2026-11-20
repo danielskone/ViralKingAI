@@ -347,7 +347,7 @@ def _append_card(video: bytes, card_png: bytes, w: int, h: int, seconds: float =
 
 
 @app.cls(gpu=["L4", "A10G", "L40S", "A100-80GB", "H100"], image=gpu_image, volumes={MODELS_DIR: models}, secrets=secrets,
-         timeout=600, scaledown_window=120)
+         timeout=600, scaledown_window=15)
 class ScriptWriter:
     @modal.enter()
     def load(self):
@@ -730,7 +730,7 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
 
 
 @app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
-         secrets=secrets, timeout=1500, scaledown_window=60, max_containers=2)
+         secrets=secrets, timeout=1500, scaledown_window=5, max_containers=2)
 class ImageEditor:
     pipe = None
 
@@ -782,10 +782,13 @@ class ImageEditor:
 
 
 # --------------------------------------------------------------------------- video
+# Modal bills a GPU for every second it stays up, including the idle "scaledown" wait after a job.
+# One run calls each model once (or a few times back to back, which reuse the container while it
+# is busy), so the idle waits are kept to a few seconds instead of a minute.
 
 
 @app.cls(gpu=["H100", "A100-80GB"], image=ltx_image, volumes={MODELS_DIR: models}, memory=81920,
-         timeout=1800, scaledown_window=60, max_containers=2)
+         timeout=1800, scaledown_window=10, max_containers=2)
 class VoiceVideo:
     @modal.enter()
     def load(self):
@@ -843,7 +846,7 @@ def prefetch_ltx() -> str:
 
 
 @app.cls(gpu=["H100", "A100-80GB"], image=gpu_image, volumes={MODELS_DIR: models},
-         secrets=secrets, timeout=VIDEO_TIMEOUT, scaledown_window=60, max_containers=2)
+         secrets=secrets, timeout=VIDEO_TIMEOUT, scaledown_window=10, max_containers=2)
 class VideoGenerator:
     @modal.enter()
     def load(self):
