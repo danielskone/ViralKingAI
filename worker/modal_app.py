@@ -34,7 +34,7 @@ MODELS_DIR = "/models"
 SIZES = {"9:16": (704, 1280), "16:9": (1280, 704), "1:1": (960, 960)}
 FPS = 24
 NUM_FRAMES = 121  # ~5 seconds; must be 4k+1
-STEPS = int(os.environ.get("WAN_STEPS", "25"))  # 25 keeps quality, ~40% less GPU than 40
+STEPS = int(os.environ.get("WAN_STEPS", "35"))  # 25 looked soft; 35 is sharper for ~+$0.10 a scene
 VIDEO_TIMEOUT = 3600  # seconds Modal lets one clip run (photo edit + animation + voice)
 RENDER_BUDGET = VIDEO_TIMEOUT - 240  # stop early so the job is marked failed, not left "running"
 # Wan's own recommended negative prompt (the model was trained with it), plus English extras.
@@ -42,8 +42,14 @@ NEGATIVE = (
     "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，"
     "JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，"
     "手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走, "
-    "blurry, low quality, distorted, deformed hands, extra fingers, watermark, text, logo artifacts, flicker"
+    "blurry, low quality, distorted, deformed hands, extra fingers, watermark, text, logo artifacts, flicker, "
+    "out of focus, blurry face, soft focus, face out of focus, background in focus while face is blurry, "
+    "garbled letters, smeared details, low resolution"
 )
+# Added to every shot so the face (and lip sync) stays crisp instead of the camera focusing past it.
+SHARP = ", sharp focus on the face and the product, everything crisp and detailed, high resolution, 4K"
+# Final full video is upscaled to 1080p for posting.
+FULL_SIZES = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
 
 app = modal.App(APP_NAME)
 models = modal.Volume.from_name("viralking-models", create_if_missing=True)
@@ -180,9 +186,9 @@ def _make_full_video(sb, project: dict, jobs: list[dict]):
          and (j.get("output") or {}).get("storage_path")),
         key=lambda j: j["input"].get("scene_index", 0),
     )
-    if len(scenes) < 2:
+    if not scenes:
         return
-    w, h = SIZES.get(project.get("aspect_ratio") or "9:16", SIZES["9:16"])
+    w, h = FULL_SIZES.get(project.get("aspect_ratio") or "9:16", FULL_SIZES["9:16"])
     clips = [sb.storage.from_("media").download(j["output"]["storage_path"]) for j in scenes]
     data = _join_clips(clips, w, h)
     path = f"{project['owner_id']}/{project['id']}/generated/{run_id}-full.mp4"
@@ -219,10 +225,10 @@ def _join_clips(clips: list[bytes], w: int, h: int) -> bytes:
             if not has_audio:
                 cmd += ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-shortest"]
             cmd += ["-map", "0:v:0", "-map", "0:a:0" if has_audio else "1:a:0",
-                    "-vf", f"fps={FPS},scale={w}:{h}:force_original_aspect_ratio=decrease,"
-                           f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p",
+                    "-vf", f"fps={FPS},scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+                           f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.6:5:5:0.0,setsar=1,format=yuv420p",
                     "-af", "aresample=44100,aformat=channel_layouts=stereo",
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "160k", out]
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-c:a", "aac", "-b:a", "160k", out]
             subprocess.run(cmd, check=True, capture_output=True)
             parts.append(out)
         listing = f"{d}/list.txt"
@@ -339,15 +345,17 @@ class ScriptWriter:
             "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
             "cinematographer: name the subject and what they look like, the exact action, the "
             "setting, the camera move (slow dolly in, tracking shot, orbit, handheld), the lens "
-            "and framing (close-up, medium shot, 35mm, shallow depth of field), the lighting "
+            "and framing (close-up, medium shot, 35mm, deep focus), the lighting "
             "(golden hour, soft window light, neon) and the mood. Be literal and concrete; one "
-            "main action per shot; no on-screen text or logos. Reply with JSON only."
+            "main action per shot; no on-screen text or logos. When a person is in the shot their face "
+            "must be in sharp focus: never use shallow depth of field or blur on the face, and keep "
+            "products held at chest height, not pushed into the lens. Reply with JSON only."
         )
         example = (
             "Medium tracking shot of a confident young woman in a cream knit sweater walking "
             "down a cobblestone street at golden hour, warm sunlight flaring through the trees "
             "behind her, she glances at the camera and smiles, fabric moving naturally with "
-            "each step, shallow depth of field, 35mm lens, soft film grain, premium fashion "
+            "each step, her face in sharp focus, 35mm lens, crisp detail, premium fashion "
             "commercial look."
         )
         if subject in ("product_model", "product_avatar"):
@@ -643,7 +651,7 @@ class VideoGenerator:
         from PIL import Image
 
         common = dict(
-            prompt=prompt, negative_prompt=NEGATIVE, height=h, width=w,
+            prompt=prompt.rstrip(" .") + SHARP, negative_prompt=NEGATIVE, height=h, width=w,
             num_frames=NUM_FRAMES, guidance_scale=5.0, num_inference_steps=STEPS,
             callback_on_step_end=self._deadline(t0), callback_on_step_end_tensor_inputs=[],
         )
@@ -654,7 +662,7 @@ class VideoGenerator:
             else:
                 frames = self.t2v(**common).frames[0]
             with tempfile.NamedTemporaryFile(suffix=".mp4") as f:
-                export_to_video(frames, f.name, fps=FPS)
+                export_to_video(frames, f.name, fps=FPS, quality=9)
                 return open(f.name, "rb").read()
         finally:
             # Release GPU memory so a failed render cannot starve the next one.
