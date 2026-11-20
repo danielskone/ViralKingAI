@@ -1,0 +1,28 @@
+name: Voice video smoke test (temporary)
+
+# Runs only on the voice-video branch. Uses `modal run` (a temporary app), so the live worker is untouched.
+on:
+  push:
+    branches: [voice-video]
+    paths: ["worker/**", ".github/workflows/voice-smoke.yml"]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r worker/requirements.txt pillow
+      - run: modal run worker/modal_app.py::voice_smoke
+      - run: ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,sample_rate:format=duration -of compact voice-smoke.mp4 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voice-smoke
+          path: voice-smoke.mp4
+          retention-days: 2
