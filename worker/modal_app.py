@@ -475,25 +475,40 @@ class ScriptWriter:
             photo_rule = "No photo was uploaded; describe every scene fully."
         sells = subject != "avatar" or bool(product_name)
         thing = f'the product ("{product_name}")' if product_name else "the product"
+        # Scripts follow Daniel's 4 reference UGC videos (skin oil, tumbler, blender, handbag):
+        # a personal-result hook, 2-3 concrete everyday benefits in casual speech, then a personal
+        # verdict, said nonstop in about 13-15 seconds. A short, natural "link's below" closes it.
         cta_rule = (
-            f"The LAST scene's line is the call to action and must sell {thing}: name the product (or say "
-            "\"this\" if no real name is given), give one reason to act now (a deal, limited stock, a deadline "
-            "like Christmas, or how good it feels), and say exactly what to do, e.g. \"Honestly, grab these "
-            "before Christmas, tap the link!\" or \"Trust me, get yours today, link's right below!\". "
-            "With only 1 scene, that one line is a quick hook plus the call to action."
+            f"The LAST scene's line is the personal verdict plus a soft, natural call to action for {thing}, "
+            "said like a friend, not a salesperson, e.g. \"Honestly, I'm not going back, link's right below.\" "
+            "or \"I literally take it everywhere now, the link's down there if you want one.\" "
+            "With only 1 scene, that one line is the hook plus the soft call to action."
             if sells else
-            "The LAST scene's line ends with a clear call to action (follow, comment, or tap the link)."
+            "The LAST scene's line is a personal verdict that ends with a soft call to action (follow or comment)."
         )
         human_rule = (
-            "Lines must sound like a real person talking to a friend, not an announcer or an ad: first "
-            "person, contractions (I'm, you're, it's), short natural phrases, a little emotion or surprise "
-            "(\"okay, I'm obsessed\", \"no joke\", \"look at this\", \"I cannot believe how good this is\", "
-            "\"I didn't expect to like it this much\", \"this has literally changed my morning routine\"), "
-            "one concrete detail they can see or feel (keeps it cold all day, fits in my cup holder, holds "
-            "its shape, absorbs so fast). Talk like you're sharing a find with a friend, upbeat and a little "
-            "breathless, and keep talking all the way through with no pauses. No buzzwords like \"elevate\", \"game-changer\", \"must-have\" or \"introducing\". Scene 1's "
-            "line is a scroll-stopping hook in the first 3 words (a question, a surprise, or a bold claim). "
-            "The lines flow together as one short story: hook, why they love it, call to action."
+            "Write the lines EXACTLY like these real UGC creator scripts (each one is said nonstop in about "
+            "13-15 seconds):\n"
+            "1) \"Okay, I cannot believe how good this is. I put two drops on at night and I woke up glowing, "
+            "like actually glowing. My skin has never looked this good. Yeah, I am not going back.\"\n"
+            "2) \"I've been using this tumbler every day lately and I didn't expect to like it this much. It "
+            "keeps my water cold literally all day, which is kind of crazy, it fits in my car cup holder and "
+            "the handle is actually super comfortable. I take it everywhere now.\"\n"
+            "3) \"This blender has literally changed my morning routine. I throw in spinach, an orange, some "
+            "fruit, and it's smooth in like thirty seconds, no chunks at all. Honestly, I'm obsessed.\"\n"
+            "4) \"Okay, I just got this bag in the cherry color and it's even better in person. The leather "
+            "holds its shape, it fits everything I need, and this clasp is so cute, it makes the whole outfit.\"\n"
+            "The pattern: open with a personal result or surprise (\"I cannot believe how good this is\", "
+            "\"I didn't expect to like it this much\", \"this has literally changed my...\"), then 2-3 concrete "
+            "everyday benefits they noticed themselves (how it feels, how long it lasts, where it fits, how fast "
+            "it works), then a personal verdict (\"I'm not going back\", \"I take it everywhere now\", "
+            "\"I'm obsessed\"). First person, casual filler words (okay, literally, honestly, actually, like, "
+            "which is kind of crazy), contractions, upbeat and a little breathless, talking the whole time. "
+            "Never sound like an ad: no buzzwords (\"elevate\", \"game-changer\", \"must-have\", \"introducing\"), "
+            "no prices or claims you can't see in the photo, no hashtags. Split the whole script across the "
+            "scenes so it flows as one continuous take: scene 1 = the hook, middle scenes = the benefits, last "
+            "scene = the verdict. Copy the style only: every word must be about THIS product and what you can "
+            "see in its photo, never the example products."
         )
         if talk and subject != "product":
             same_person = (
@@ -508,13 +523,12 @@ class ScriptWriter:
                 "movement, mouth clearly visible, nothing covering the face, soft natural light." + same_person +
                 " For each scene also write \"line\": exactly what they say out loud, 10-14 words, "
                 "so the voice fills the whole 5 seconds. "
-                + human_rule + (" Every line is about the product: what it is, a detail they love, and why the "
-                "viewer needs it." if subject in ("product_model", "product_avatar") else "") + " " + cta_rule
+                + human_rule + " " + cta_rule
             )
         elif talk:
             talk_rule = (
                 "A narrator speaks over the video. For each scene also write \"line\": the voice-over for "
-                "that shot, 10-14 words, warm and persuasive. " + human_rule + " " + cta_rule
+                "that shot, 10-14 words. " + human_rule + " " + cta_rule
             )
         else:
             talk_rule = ""
@@ -560,8 +574,9 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
             last = (scenes[-1].get("line") or "").strip()
             cta_words = ("link", "grab", "get yours", "get one", "get these", "shop", "order", "buy", "tap")
             if not any(k in last.lower() for k in cta_words):
-                joined = f"{last.rstrip('.!?')}! {cta}".strip("! ") if last else cta
-                scenes[-1]["line"] = joined if len(joined.split()) <= 18 else cta
+                # Keep it casual like the reference videos: a soft "link's below", not an ad slogan.
+                joined = f"{last.rstrip('.!?')}, link's right below." if last else cta
+                scenes[-1]["line"] = joined if len(joined.split()) <= 20 else cta
         return {"hook": data.get("hook", ""), "cta": cta, "scenes": scenes}
 
     @modal.method()
