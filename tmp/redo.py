@@ -34,4 +34,5 @@ def main():
             busy = [r for r in rows if r[1] != "script"]
             if len(busy) >= 3:
                 break
+    time.sleep(120)  # the full video is joined just after the last scene is marked done
     print("DONE", status.remote())
