@@ -44,10 +44,13 @@ NEGATIVE = (
     "手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走, "
     "blurry, low quality, distorted, deformed hands, extra fingers, watermark, text, logo artifacts, flicker, "
     "out of focus, blurry face, soft focus, face out of focus, background in focus while face is blurry, "
-    "garbled letters, smeared details, low resolution"
+    "garbled letters, smeared details, low resolution, "
+    "cinematic color grading, studio lighting, dramatic lighting, film look, glossy commercial, CGI, plastic skin"
 )
 # Added to every shot so the face (and lip sync) stays crisp instead of the camera focusing past it.
-SHARP = ", sharp focus on the face and the product, everything crisp and detailed, high resolution, 4K"
+# It also pushes every shot toward the real-phone UGC look of Daniel's reference videos.
+SHARP = (", shot on an iPhone, natural daylight, realistic skin texture, sharp focus on the face and the "
+         "product, everything crisp and detailed, high resolution")
 # Final full video is upscaled to 1080p for posting.
 FULL_SIZES = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
 
@@ -227,7 +230,7 @@ def _join_clips(clips: list[bytes], w: int, h: int) -> bytes:
             cmd += ["-map", "0:v:0", "-map", "0:a:0" if has_audio else "1:a:0",
                     "-vf", f"fps={FPS},scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
                            f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,unsharp=5:5:0.6:5:5:0.0,setsar=1,format=yuv420p",
-                    "-af", "aresample=44100,aformat=channel_layouts=stereo",
+                    "-af", "aresample=44100,aformat=channel_layouts=stereo,loudnorm=I=-16:TP=-1.5:LRA=11",
                     "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-c:a", "aac", "-b:a", "160k", out]
             subprocess.run(cmd, check=True, capture_output=True)
             parts.append(out)
@@ -340,33 +343,68 @@ class ScriptWriter:
 
     def _write(self, title: str, offer: str, idea: str, subject: str, n: int, talk: bool = False,
                product_name: str = "", product_desc: str = "") -> dict:
-        system = (
-            "You are an award-winning commercial director writing shot prompts for the Wan 2.2 "
-            "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
-            "cinematographer: name the subject and what they look like, the exact action, the "
-            "setting, the camera move (slow dolly in, tracking shot, orbit, handheld), the lens "
-            "and framing (close-up, medium shot, 35mm, deep focus), the lighting "
-            "(golden hour, soft window light, neon) and the mood. Be literal and concrete; one "
-            "main action per shot; no on-screen text or logos. When a person is in the shot their face "
-            "must be in sharp focus: never use shallow depth of field or blur on the face, and keep "
-            "products held at chest height, not pushed into the lens. Reply with JSON only."
-        )
-        example = (
-            "Medium tracking shot of a confident young woman in a cream knit sweater walking "
-            "down a cobblestone street at golden hour, warm sunlight flaring through the trees "
-            "behind her, she glances at the camera and smiles, fabric moving naturally with "
-            "each step, her face in sharp focus, 35mm lens, crisp detail, premium fashion "
-            "commercial look."
-        )
+        ugc = subject != "product"  # a person is on screen: use the UGC creator style
+        if ugc:
+            # Learned from Daniel's 4 reference UGC videos (skin oil, tumbler, blender, handbag):
+            # real creators filming themselves on a phone at home, not a polished commercial.
+            system = (
+                "You write shot prompts for the Wan 2.2 AI video model in the style of real TikTok UGC "
+                "(user-generated content): a creator filming themselves on their phone at home. Each prompt "
+                "is one continuous 5-second shot. Style rules for EVERY shot: vertical iPhone video; the "
+                "phone sits on a tripod or is held at arm's length, so the camera is static or only slightly "
+                "handheld (never dolly, orbit, crane or tracking moves); a real, tidy, lived-in home that fits "
+                "the product (bathroom vanity for skincare and beauty, walk-in closet or bedroom with a mirror "
+                "for fashion and bags, bright kitchen counter for food and kitchen gadgets, cozy living room "
+                "or desk otherwise); soft natural daylight from a window, no studio lights; casual, pretty, "
+                "everyday outfit (tank top, cropped cardigan, sweats); a very expressive creator: wide eyes, "
+                "raised eyebrows, an open-mouthed 'oh my gosh' face, big smiles, talking with their hands. "
+                "The product is handled for real: held up beside the face toward the lens so its details "
+                "show, then used (applied to the skin, sipped through the straw, blended, worn, opened, "
+                "clasped). Face and product both in sharp focus, real skin texture, no on-screen text. "
+                "Reply with JSON only."
+            )
+            example = (
+                "Medium close-up, vertical iPhone video on a tripod, of a young woman with long wavy blonde "
+                "hair in a white tank top standing at her bright bathroom vanity, soft window daylight. She "
+                "leans toward the camera with wide eyes and an open-mouthed surprised smile, lifts a small "
+                "amber glass dropper bottle up beside her cheek toward the lens, tilts it so the label shows, "
+                "and talks excitedly with her other hand moving. Static camera, her face and the bottle in "
+                "sharp focus, realistic skin texture, authentic TikTok UGC look."
+            )
+            recipe = (
+                "Follow this shot order (it is how the best UGC ads are cut): scene 1 = HOOK, medium close-up, "
+                "the creator leans in with a shocked or excited face and holds the product up beside their face; "
+                "middle scenes = DEMO, they actually use the product, with a close shot of the product in their "
+                "hand near the lens (applying it, pouring, sipping, opening, wearing it) while still talking; "
+                "last scene = PAYOFF, they step back a little into a medium shot showing the result or "
+                "the look, hold the product up and smile at the camera. "
+            )
+        else:
+            system = (
+                "You are an award-winning commercial director writing shot prompts for the Wan 2.2 "
+                "AI video model. Each prompt is one continuous 5-second shot. Write prompts like a "
+                "cinematographer: name the subject and what they look like, the exact action, the "
+                "setting, the camera move (slow dolly in, tracking shot, orbit, handheld), the lens "
+                "and framing (close-up, medium shot, 35mm, deep focus), the lighting "
+                "(golden hour, soft window light, neon) and the mood. Be literal and concrete; one "
+                "main action per shot; no on-screen text or logos. Reply with JSON only."
+            )
+            example = (
+                "Slow dolly in on a matte lavender insulated tumbler standing on a sunlit marble kitchen "
+                "counter, condensation beading on the steel, a hand reaches in and lifts it by the handle, "
+                "soft morning window light, 50mm lens, deep focus, crisp detail, premium product commercial look."
+            )
+            recipe = ""
         if subject in ("product_model", "product_avatar"):
             who = ("the person from the customer's avatar photo" if subject == "product_avatar"
                    else "a fitting, attractive person")
             photo_rule = (
                 "The customer uploaded a product photo. For scene 1 ALSO write \"first_frame\": a "
                 f"40-70 word image-editing instruction for a photorealistic photo of {who} wearing or "
-                "using this exact product (keep its color, print, logo and details exactly the same) "
-                "in the setting of the idea, described like a fashion photo (pose, setting, light, "
-                "framing). Scene 1's \"prompt\" then describes that same person and setting and the "
+                "using this exact product (keep its color, print, logo and details exactly the same), "
+                "styled like a frame from a real TikTok UGC video: a casual phone photo at home in the room that suits the product "
+                "of the house, soft window daylight, the person facing the camera with an excited expression and "
+                "holding the product up beside their face (or wearing it), product label facing the camera. Scene 1's \"prompt\" then describes that same person and setting and the "
                 "motion that follows."
             ) + (" Scenes after scene 1 start from the plain avatar photo, so their prompts describe that "
                  "person talking to the camera and do not show the product." if subject == "product_avatar" else "")
@@ -399,8 +437,11 @@ class ScriptWriter:
         human_rule = (
             "Lines must sound like a real person talking to a friend, not an announcer or an ad: first "
             "person, contractions (I'm, you're, it's), short natural phrases, a little emotion or surprise "
-            "(\"okay, I'm obsessed\", \"no joke\", \"look at this\"), one concrete detail they can see or "
-            "feel. No buzzwords like \"elevate\", \"game-changer\", \"must-have\" or \"introducing\". Scene 1's "
+            "(\"okay, I'm obsessed\", \"no joke\", \"look at this\", \"I cannot believe how good this is\", "
+            "\"I didn't expect to like it this much\", \"this has literally changed my morning routine\"), "
+            "one concrete detail they can see or feel (keeps it cold all day, fits in my cup holder, holds "
+            "its shape, absorbs so fast). Talk like you're sharing a find with a friend, upbeat and a little "
+            "breathless, and keep talking all the way through with no pauses. No buzzwords like \"elevate\", \"game-changer\", \"must-have\" or \"introducing\". Scene 1's "
             "line is a scroll-stopping hook in the first 3 words (a question, a surprise, or a bold claim). "
             "The lines flow together as one short story: hook, why they love it, call to action."
         )
@@ -411,17 +452,19 @@ class ScriptWriter:
                 "move change." if subject in ("avatar", "product_avatar") else "")
             talk_rule = (
                 "The person TALKS to the camera in every scene, like a real UGC creator filming on their "
-                "phone. In each prompt, frame them in a medium close-up facing the camera, speaking with "
-                "natural, lively expressions (smiling, raised eyebrows, a nod, hand gestures), gentle head "
+                "phone. In each prompt, frame them facing the camera (medium close-up; for the last scene a "
+                "medium shot from the waist up, never so far away that the face gets small), speaking with "
+                "natural, lively expressions (wide eyes, raised eyebrows, big smiles, hand gestures), gentle head "
                 "movement, mouth clearly visible, nothing covering the face, soft natural light." + same_person +
-                " For each scene also write \"line\": exactly what they say out loud, 8-12 words. "
+                " For each scene also write \"line\": exactly what they say out loud, 10-14 words, "
+                "so the voice fills the whole 5 seconds. "
                 + human_rule + (" Every line is about the product: what it is, a detail they love, and why the "
                 "viewer needs it." if subject in ("product_model", "product_avatar") else "") + " " + cta_rule
             )
         elif talk:
             talk_rule = (
                 "A narrator speaks over the video. For each scene also write \"line\": the voice-over for "
-                "that shot, 8-12 words, warm and persuasive. " + human_rule + " " + cta_rule
+                "that shot, 10-14 words, warm and persuasive. " + human_rule + " " + cta_rule
             )
         else:
             talk_rule = ""
@@ -436,14 +479,14 @@ class ScriptWriter:
 {desc_line}
 Customer's idea for the video: "{idea or 'not given; choose a strong, scroll-stopping concept for this offer'}".
 {photo_rule}
-{talk_rule}
+{recipe}{talk_rule}
 
 {name_line}
 Write {n} scene(s) for a short social media ad that follows the customer's idea closely. It must sell:
 the last scene shows the product clearly (in hand, worn, or as the hero of the shot) so the call to
 action lands, and its caption is the call to action.
 For each scene give:
-- "prompt": 70-110 words, in the style of this example: "{example}"
+- "prompt": 70-110 words that repeat the setting and the person's look in every scene, in the style of this example: "{example}"
 - "caption": on-screen text for that scene, max 8 words.
 Also give "hook" (max 8 words) and "cta" (max 6 words): an urgent call to action that names the product
 when a real name is known, e.g. "Get yours before they're gone" or "Tap the link, grab yours".
@@ -461,7 +504,7 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
             cta_words = ("link", "grab", "get yours", "get one", "get these", "shop", "order", "buy", "tap")
             if not any(k in last.lower() for k in cta_words):
                 joined = f"{last.rstrip('.!?')}! {cta}".strip("! ") if last else cta
-                scenes[-1]["line"] = joined if len(joined.split()) <= 14 else cta
+                scenes[-1]["line"] = joined if len(joined.split()) <= 18 else cta
         return {"hook": data.get("hook", ""), "cta": cta, "scenes": scenes}
 
     @modal.method()
@@ -536,7 +579,9 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                         "line": (scene.get("line") or "").strip() if voice else "",
                         "voice": voice,
                         # The last scene ends on the customer's real product photo with the call to action.
-                        "end_card": product if (product and i == len(script["scenes"]) - 1) else None,
+                        # UGC style ends on the creator holding the product, not a still photo card.
+                        "end_card": (product if (product and not model_shot and i == len(script["scenes"]) - 1)
+                                     else None),
                         "end_text": (script.get("cta") or scene.get("caption") or "").strip()[:60],
                     },
                 }
