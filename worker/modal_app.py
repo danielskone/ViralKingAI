@@ -247,6 +247,37 @@ def _settle_project(sb, project_id: str):
         print(f"joining the scenes failed: {e!r}", flush=True)
 
 
+CAPTION_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+
+def _burn_caption(video: bytes, title: str, sub: str, w: int, h: int) -> bytes:
+    """Burn a call-to-action caption onto the whole video, like Daniel's reference ad: a dark
+    see-through box a little below the face, a big white title ("Comment FAIRY") and a smaller
+    yellow line under it ("and I will DM you the link")."""
+    import subprocess
+    import tempfile
+
+    title, sub = title.strip()[:40], sub.strip()[:60]
+    big, small = int(h * 0.044), int(h * 0.025)
+    box_y = int(h * 0.665)
+    box_h = int(big * 1.35 + (small * 1.6 if sub else 0) + h * 0.012)
+    with tempfile.TemporaryDirectory() as d:
+        src, out = f"{d}/in.mp4", f"{d}/out.mp4"
+        open(src, "wb").write(video)
+        open(f"{d}/t.txt", "w").write(title)
+        open(f"{d}/s.txt", "w").write(sub)
+        vf = (f"drawbox=x={int(w * 0.085)}:y={box_y}:w={int(w * 0.83)}:h={box_h}:color=black@0.55:t=fill,"
+              f"drawtext=fontfile={CAPTION_FONT}:textfile={d}/t.txt:fontsize={big}:fontcolor=white:"
+              f"x=(w-text_w)/2:y={box_y + int(h * 0.008)}")
+        if sub:
+            vf += (f",drawtext=fontfile={CAPTION_FONT}:textfile={d}/s.txt:fontsize={small}:"
+                   f"fontcolor=0xFFD23F:x=(w-text_w)/2:y={box_y + int(h * 0.008) + int(big * 1.3)}")
+        subprocess.run(["ffmpeg", "-y", "-i", src, "-vf", vf, "-c:v", "libx264", "-preset", "medium",
+                        "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", out],
+                       check=True, capture_output=True)
+        return open(out, "rb").read()
+
+
 def _make_full_video(sb, project: dict, jobs: list[dict]):
     """Join the latest run's scene clips, in order, into one video saved as an "export" asset."""
     scripts = sorted((j for j in jobs if j["job_type"] == "script" and j["status"] == "succeeded"),
@@ -265,6 +296,12 @@ def _make_full_video(sb, project: dict, jobs: list[dict]):
     w, h = FULL_SIZES.get(project.get("aspect_ratio") or "9:16", FULL_SIZES["9:16"])
     clips = [sb.storage.from_("media").download(j["output"]["storage_path"]) for j in scenes]
     data = _join_clips(clips, w, h)
+    run_inp = scripts[-1].get("input") or {}
+    if (run_inp.get("caption_title") or "").strip():
+        try:
+            data = _burn_caption(data, run_inp["caption_title"], run_inp.get("caption_sub") or "", w, h)
+        except Exception as ce:  # noqa: BLE001
+            print(f"on-screen caption failed, keeping the video without it: {ce!r}", flush=True)
     path = f"{project['owner_id']}/{project['id']}/generated/{run_id}-full.mp4"
     sb.storage.from_("media").upload(path, data, {"content-type": "video/mp4", "upsert": "true"})
     exists = sb.table("assets").select("id").eq("storage_path", path).execute().data
