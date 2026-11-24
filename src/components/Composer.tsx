@@ -6,6 +6,7 @@ import { createAndGenerate } from "@/app/actions";
 import { uploadToLibrary } from "@/components/LibraryUpload";
 import ProductLink from "@/components/ProductLink";
 import { CTA_OPTIONS, DEFAULT_CTA } from "@/lib/cta";
+import { UGC_SCRIPTS, type UgcScript } from "@/lib/ugc-scripts";
 import { Arrow, Box, Check, ChevronDown, Layers, Mic, Play, Plus, Ratio, Sparkle, User } from "@/components/icons";
 
 type Item = { id: string; url?: string; thumb?: string; file_name: string | null };
@@ -264,6 +265,44 @@ function IdeaMenu({ ideas, label, onNext, onPick }: { ideas: Idea[]; label: stri
   );
 }
 
+/** "UGC scripts" chip: ready-made ads with exact spoken lines (and an optional on-screen caption). */
+function ScriptMenu({ onPick }: { onPick: (s: UgcScript) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (e: MouseEvent | TouchEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", close);
+    document.addEventListener("touchstart", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("touchstart", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, []);
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen(!open)} className={"chip" + (open ? " chip-on" : "")}>
+        <Mic className="h-4 w-4" /> UGC scripts <ChevronDown className={"h-4 w-4 transition " + (open ? "rotate-180" : "")} />
+      </button>
+      {open && (
+        <div role="listbox" className="absolute left-0 top-full z-40 mt-2 max-h-[60vh] w-80 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl border border-gold/30 bg-panel p-1.5 shadow-2xl shadow-black/60">
+          <p className="eyebrow px-3 pb-1 pt-2">Ready-made UGC scripts</p>
+          {UGC_SCRIPTS.map((it) => (
+            <button type="button" role="option" aria-selected={false} key={it.label}
+              onClick={() => { onPick(it); setOpen(false); }}
+              className="block w-full rounded-xl px-3 py-2 text-left transition hover:bg-card">
+              <span className="block text-sm font-medium text-foreground">{it.label} <span className="text-xs font-normal text-gold-light">· {it.hint}</span></span>
+              <span className="line-clamp-2 block text-xs text-muted">{(it.text.match(/"[^"]+"/g) ?? []).join("  ")}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Composer({ products, avatars, userId }: { products: Item[]; avatars: Item[]; userId: string }) {
   const [idea, setIdea] = useState("");
   const [product, setProduct] = useState<string | null>(null);
@@ -273,6 +312,20 @@ export default function Composer({ products, avatars, userId }: { products: Item
   const [modelShot, setModelShot] = useState(true);
   const [voice, setVoice] = useState("af_heart");
   const [cta, setCta] = useState(DEFAULT_CTA);
+  const [caption, setCaption] = useState<{ title: string; sub: string } | null>(null);
+  const pickScript = (s: UgcScript) => {
+    setIdea(s.text);
+    setScenes(s.scenes);
+    setCaption(s.caption ?? null);
+    if (!voice) setVoice("af_heart");
+  };
+  const editCaption = () => {
+    const title = window.prompt("Words on screen (big line). Leave empty for no caption.", caption?.title ?? "Comment LINK");
+    if (title === null) return;
+    if (!title.trim()) return setCaption(null);
+    const sub = window.prompt("Small line under it (optional)", caption?.sub ?? "and I will DM you the link");
+    setCaption({ title: title.trim(), sub: (sub ?? "").trim() });
+  };
   const [pending, setPending] = useState(false);
   const [autoN, setAutoN] = useState(0);
   const ideas = AUTO[product && avatar ? "both" : product ? "product" : avatar ? "avatar" : "none"];
@@ -290,6 +343,8 @@ export default function Composer({ products, avatars, userId }: { products: Item
       <input type="hidden" name="model_shot" value={product && modelShot ? "on" : ""} />
       <input type="hidden" name="voice" value={voice} />
       <input type="hidden" name="cta" value={cta} />
+      <input type="hidden" name="caption_title" value={caption?.title ?? ""} />
+      <input type="hidden" name="caption_sub" value={caption?.sub ?? ""} />
       <textarea
         name="idea"
         value={idea}
@@ -307,6 +362,9 @@ export default function Composer({ products, avatars, userId }: { products: Item
         <Dropdown icon={<Layers className="h-4 w-4" />} label="Scenes" options={SCENES} value={scenes} onChange={setScenes} />
         <Dropdown icon={<Mic className="h-4 w-4" />} label="Voice" options={VOICE_OPTS} value={voice} onChange={setVoice} />
         {voice && <Dropdown icon={<Sparkle className="h-4 w-4" />} label="Call to action" options={CTA_OPTIONS} value={cta} onChange={setCta} />}
+        <button type="button" onClick={editCaption} title="Words that stay on screen for the whole video" className={"chip max-w-[14rem]" + (caption ? " chip-on" : "")}>
+          <Plus className="h-4 w-4 shrink-0" /> <span className="truncate">{caption ? `Caption: ${caption.title}` : "Caption"}</span>
+        </button>
         {product && !avatar && (
           <button type="button" onClick={() => setModelShot(!modelShot)} className={"chip" + (modelShot ? " chip-on" : "")}>
             <Sparkle className="h-4 w-4" /> On a model
@@ -319,6 +377,7 @@ export default function Composer({ products, avatars, userId }: { products: Item
       </div>
       <div className="mt-4 flex flex-wrap gap-2 border-t border-border pt-4">
         <IdeaMenu ideas={ideas} label={idea && autoN ? "Another idea" : "Write it for me"} onNext={writeForMe} onPick={setIdea} />
+        <ScriptMenu onPick={pickScript} />
         <span className="eyebrow mx-1 self-center">or try</span>
         {STARTERS.map((s) => (
           <button type="button" key={s.label} className="chip" onClick={() => setIdea(s.text)}>{s.label}</button>

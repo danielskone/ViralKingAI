@@ -1,5 +1,6 @@
 "use server";
 
+import { captionFrom } from "@/lib/ugc-scripts";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
@@ -77,7 +78,7 @@ export async function startGeneration(formData: FormData) {
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-  const prevIn = (prev?.input ?? {}) as { product_path?: string | null; avatar_path?: string | null; voice?: string | null; product_name?: string | null; cta_line?: string | null };
+  const prevIn = (prev?.input ?? {}) as { product_path?: string | null; avatar_path?: string | null; voice?: string | null; product_name?: string | null; cta_line?: string | null; caption_title?: string | null; caption_sub?: string | null };
   const voice = formData.has("voice") ? voiceFrom(formData) : (prevIn.voice ?? null);
 
   const { data: job, error } = await supabase
@@ -94,6 +95,9 @@ export async function startGeneration(formData: FormData) {
         voice,
         product_name: prevIn.product_name ?? null,
         cta_line: formData.has("cta") ? ctaFrom(formData.get("cta")) : (prevIn.cta_line ?? null),
+        ...(formData.has("caption_title")
+          ? captionFrom(formData.get("caption_title"), formData.get("caption_sub"))
+          : { caption_title: prevIn.caption_title ?? null, caption_sub: prevIn.caption_sub ?? null }),
       },
     })
     .select("id")
@@ -181,6 +185,7 @@ export async function createAndGenerate(formData: FormData) {
         model_shot: !!productPath && (formData.get("model_shot") === "on" || !!avatarPath),
         voice: voiceFrom(formData),
         cta_line: ctaFrom(formData.get("cta")),
+        ...captionFrom(formData.get("caption_title"), formData.get("caption_sub")),
       },
     })
     .select("id")
