@@ -709,6 +709,13 @@ JSON shape: {{"hook": str, "cta": str, "scenes": [{{"prompt": str, "caption": st
                                  product_desc=product_desc, person_desc=person_desc,
                                  cta_line=(inp.get("cta_line") or "").strip()[:120])
             script["product"] = product_desc
+            # The writer sometimes returns fewer scenes than asked (one long scene instead of two
+            # 5-second ones). When the customer wrote a line for every scene, repeat the last shot
+            # so each line gets its own scene.
+            wanted = _exact_lines(idea, n) if voice else None
+            while wanted and all(wanted) and 0 < len(script["scenes"]) < n:
+                extra = {k: v for k, v in script["scenes"][-1].items() if k != "first_frame"}
+                script["scenes"].append(extra)
             exact = _exact_lines(idea, len(script["scenes"])) if voice else None
             if exact:
                 # The customer wrote the exact words to say: use them, not the model's lines.
