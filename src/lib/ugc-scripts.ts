@@ -10,7 +10,19 @@ const two = (hook: string, cta: string) =>
   `Scene 1: the person holds the product up beside their face with an excited smile and says "${hook}" ` +
   `Scene 2: they show the product up close to the camera, then point down toward the link and say "${cta}" ${SHOT_END}`;
 
+const SELFIE_END = "Bright bathroom vanity, soft natural window light, arm's-length selfie phone shot, real UGC creator look.";
+const three = (hook: string, demo: string, cta: string) =>
+  `Scene 1: the person holds the product up beside their face, wide-eyed and excited, and says "${hook}" ` +
+  `Scene 2: they use the product close to the camera, showing how it works, and say "${demo}" ` +
+  `Scene 3: they step back, smile, hold the product up and say "${cta}" ${SELFIE_END}`;
+
 export const UGC_SCRIPTS: UgcScript[] = [
+  { label: "Skincare routine", hint: "15 s · 3 scenes · hook, demo, payoff", scenes: 3,
+    text: three("Okay, this is my new holy grail!", "Look how smooth my skin feels already!", "Tap the link below and grab yours!") },
+  { label: "Pore pad review", hint: "15 s · 3 scenes · hook, demo, payoff", scenes: 3,
+    text: three("My pores have never looked this small!", "Just one swipe every single night.", "Seriously, get these, the link is below!") },
+  { label: "Honest first impression", hint: "15 s · 3 scenes · any product", scenes: 3,
+    text: three("Okay, I was not expecting this!", "Look at this, it's honestly so good.", "Trust me, grab yours at the link!") },
   {
     label: "Comment to get the link", hint: "5 s · “Comment LINK” on screen", scenes: 1,
     caption: { title: "Comment LINK", sub: "and I will DM you the link" },
